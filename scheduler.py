@@ -28,8 +28,7 @@ load_dotenv()
 
 from database import (
     init_db, save_bet, save_team_stats, get_team_stats,
-    get_all_bets, get_stats, is_bet_notified, mark_bet_notified,
-    delete_today_pending_bets, get_unique_bets
+    get_all_bets, get_stats, is_bet_notified, mark_bet_notified, delete_today_pending_bets
 )
 from api_clients import get_fixtures, get_odds, get_team_standings
 from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
@@ -94,6 +93,7 @@ def run_value_bet_engine(silent=False):
         return
 
     worker_state["running"] = True
+    delete_today_pending_bets()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     log.info("=" * 60)
     log.info(f"⚽ VALUE BET ENGINE — {now}")
@@ -212,7 +212,7 @@ def run_value_bet_engine(silent=False):
     worker_state["running"]    = False
 
     # Envoie uniquement les nouveaux bets
-    send_daily_summary(new_value_bets, {})
+    send_daily_summary(new_value_bets)
 
     if errors:
         send_message("⚠️ <b>Erreurs durant l'analyse :</b>\n" + "\n".join(f"• {e}" for e in errors))
@@ -268,20 +268,24 @@ def handle_bets():
     bets = get_unique_bets(limit=100)
 
     if not bets:
-        send_message("📭 <b>Aucun value bet en base.</b>\n💡 Tapez /run pour lancer une analyse.")
+        send_message(
+            "📭 <b>Aucun value bet en base.</b>\n"
+            "💡 Tapez /run pour lancer une analyse."
+        )
         return
 
-    msg = f"⚽ <b>Tous les value bets</b> — {len(bets)} sélection(s)\n{'─'*30}\n\n"
-    for b in bets[:15]:
+    msg = f"⚽ <b>Tous les value bets</b> — {len(bets)} sélection(s)\n{'─'*32}\n\n"
+    for b in bets[:20]:
         status = "✅" if b["success"] == 1 else "❌" if b["success"] == 0 else "⏳"
         msg += (
             f"{status} <b>{b['home_team']} vs {b['away_team']}</b>\n"
-            f"   📅 {b['match_date']} — {b['league']}\n"
+            f"   📅 {b['match_date']} — {b.get('league', '')}\n"
             f"   📌 {b['market']} @ <b>{b['bk_odds']}</b>\n"
             f"   💎 Value : <b>+{b['value']*100:.1f}%</b> | Proba : {b['probability']*100:.0f}%\n"
             f"   🏦 {b['bookmaker']}\n\n"
         )
     send_message(msg)
+
 
 
 def handle_stats():
