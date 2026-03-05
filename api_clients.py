@@ -2,8 +2,8 @@
 api_clients.py - API wrappers
 
 - get_fixtures()       → The Odds API (fixtures extraits des cotes)
-- get_team_standings() → FBref scraping (stats équipes, 100% gratuit)
-- get_odds()           → The Odds API (cotes bookmakers)
+- get_team_standings() → FBref scraping + fallback stats
+- get_odds()           → The Odds API (Betclic FR + Winamax FR uniquement)
 """
 
 import os
@@ -11,7 +11,7 @@ import re
 import requests
 from datetime import datetime, timezone
 from typing import Optional
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 
 
 # ─────────────────────────────────────────────
@@ -34,6 +34,9 @@ FBREF_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
 }
+
+# Seuls ces bookmakers sont utilisés
+PREFERRED_BOOKMAKERS = ["Betclic (FR)", "Winamax (FR)"]
 
 
 # ─────────────────────────────────────────────
@@ -62,11 +65,11 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
         resp.raise_for_status()
         events = resp.json()
     except Exception as e:
-        print(f"[get_fixtures] Erreur Odds API: {e}")
+        print(f"[get_fixtures] Erreur Odds API league {league_id}: {e}")
         return []
 
-    now = datetime.now(timezone.utc)
-    cutoff = now.timestamp() + days_ahead * 86400
+    now     = datetime.now(timezone.utc)
+    cutoff  = now.timestamp() + days_ahead * 86400
 
     fixtures = []
     for i, event in enumerate(events):
@@ -84,25 +87,26 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 3) -> list:
         away = event.get("away_team", "")
 
         fixtures.append({
-            "fixture_id":      event.get("id", f"odds_{i}"),
-            "date":            commence_str[:10],
-            "home_team_id":    hash(home) % 100000,
-            "home_team_name":  home,
-            "away_team_id":    hash(away) % 100000,
-            "away_team_name":  away,
-            "league_id":       league_id,
+            "fixture_id":     event.get("id", f"odds_{i}"),
+            "date":           commence_str[:10],
+            "home_team_id":   hash(home) % 100000,
+            "home_team_name": home,
+            "away_team_id":   hash(away) % 100000,
+            "away_team_name": away,
+            "league_id":      league_id,
         })
 
     return fixtures
 
 
 # ─────────────────────────────────────────────
-# TEAM STATS — FBref scraping
+# TEAM STATS — FBref scraping + fallback
 # ─────────────────────────────────────────────
 
 def get_team_standings(league_id: int, season: int) -> list:
     """
     Scrape les stats équipes depuis FBref.
+    Fallback automatique si FBref bloque.
     """
     url = FBREF_LEAGUE_MAP.get(league_id)
     if not url:
@@ -112,16 +116,14 @@ def get_team_standings(league_id: int, season: int) -> list:
         resp = requests.get(url, headers=FBREF_HEADERS, timeout=20)
         resp.raise_for_status()
     except Exception as e:
-        print(f"[get_team_standings] Erreur FBref: {e}")
+        print(f"[get_team_standings] Erreur FBref league {league_id}: {e}")
         return _fallback_stats(league_id, season)
 
     soup = BeautifulSoup(resp.text, "lxml")
 
     # FBref cache les tables dans des commentaires HTML
-    from bs4 import Comment
-    comments = soup.find_all(string=lambda text: isinstance(text, Comment))
-
     table = None
+    comments = soup.find_all(string=lambda text: isinstance(text, Comment))
     for comment in comments:
         if "stats_squads_standard_for" in comment:
             inner = BeautifulSoup(comment, "lxml")
@@ -129,12 +131,11 @@ def get_team_standings(league_id: int, season: int) -> list:
             if table:
                 break
 
-    # Fallback : chercher directement dans le DOM
     if not table:
         table = soup.find("table", {"id": "stats_squads_standard_for"})
 
     if not table:
-        print(f"[get_team_standings] Table FBref introuvable — utilisation fallback")
+        print(f"[get_team_standings] Table FBref introuvable — fallback league {league_id}")
         return _fallback_stats(league_id, season)
 
     teams = []
@@ -170,7 +171,6 @@ def get_team_standings(league_id: int, season: int) -> list:
         if games == 0:
             continue
 
-        # Estimation domicile/extérieur
         home_games = games // 2
         away_games = games - home_games
         home_gf    = int(goals_for * 0.55)
@@ -196,14 +196,14 @@ def get_team_standings(league_id: int, season: int) -> list:
 
 def _fallback_stats(league_id: int, season: int) -> list:
     """
-    Stats moyennes de fallback si FBref échoue.
-    Noms calqués sur ceux retournés par The Odds API.
+    Stats de fallback si FBref échoue.
+    Noms calqués exactement sur ceux retournés par The Odds API.
     """
-    print(f"[fallback_stats] Stats moyennes pour league {league_id}")
+    print(f"[fallback_stats] Utilisation stats moyennes — league {league_id}")
 
     if league_id == 61:  # Ligue 1
         teams_data = [
-            ("Paris Saint Germain", 38, 8, 14, 12),
+            ("Paris Saint Germain", 38, 8,  14, 12),
             ("Marseille",           30, 16, 18, 20),
             ("AS Monaco",           28, 14, 16, 18),
             ("Lyon",                26, 16, 16, 20),
@@ -246,6 +246,8 @@ def _fallback_stats(league_id: int, season: int) -> list:
             ("Burnley",            10, 28, 6,  32),
             ("Sheffield United",   8,  30, 4,  34),
             ("Bournemouth",        18, 18, 12, 20),
+            ("Ipswich Town",       14, 22, 10, 24),
+            ("Leicester City",     16, 20, 12, 22),
         ]
 
     result = []
@@ -266,12 +268,13 @@ def _fallback_stats(league_id: int, season: int) -> list:
 
 
 # ─────────────────────────────────────────────
-# ODDS — The Odds API
+# ODDS — The Odds API (Betclic FR + Winamax FR)
 # ─────────────────────────────────────────────
 
 def get_odds(league_id: int) -> list:
     """
-    Fetch upcoming match odds from The Odds API.
+    Fetch upcoming match odds depuis The Odds API.
+    Filtre uniquement Betclic (FR) et Winamax (FR).
     """
     sport_key = LEAGUE_SPORT_MAP.get(league_id)
     if not sport_key:
@@ -290,18 +293,23 @@ def get_odds(league_id: int) -> list:
         resp.raise_for_status()
         events = resp.json()
     except Exception as e:
-        print(f"[get_odds] Erreur: {e}")
+        print(f"[get_odds] Erreur league {league_id}: {e}")
         return []
 
     results = []
     for event in events:
-        home = event.get("home_team")
-        away = event.get("away_team")
+        home     = event.get("home_team")
+        away     = event.get("away_team")
         commence = event.get("commence_time", "")[:10]
-        bookmakers_odds = {}
 
+        bookmakers_odds = {}
         for bk in event.get("bookmakers", []):
             bk_name = bk.get("title", bk.get("key", "Unknown"))
+
+            # Filtre : uniquement Betclic FR et Winamax FR
+            if bk_name not in PREFERRED_BOOKMAKERS:
+                continue
+
             for mkt in bk.get("markets", []):
                 if mkt.get("key") != "h2h":
                     continue
@@ -312,6 +320,7 @@ def get_odds(league_id: int) -> list:
                     "away_win": outcomes.get(away),
                 }
 
+        # On inclut même si aucun bookmaker préféré disponible (matching quand même)
         results.append({
             "date":      commence,
             "home_team": home,
