@@ -28,7 +28,8 @@ load_dotenv()
 
 from database import (
     init_db, save_bet, save_team_stats, get_team_stats,
-    get_all_bets, get_stats, is_bet_notified, mark_bet_notified, delete_today_pending_bets
+    get_all_bets, get_stats, is_bet_notified, mark_bet_notified,
+    delete_today_pending_bets, get_unique_bets
 )
 from api_clients import get_fixtures, get_odds, get_team_standings
 from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
@@ -265,7 +266,7 @@ def handle_status():
 
 
 def handle_bets():
-    bets = get_all_bets(limit=100)
+    bets = get_unique_bets(limit=100)
 
     if not bets:
         send_message("📭 <b>Aucun value bet en base.</b>\n💡 Tapez /run pour lancer une analyse.")
