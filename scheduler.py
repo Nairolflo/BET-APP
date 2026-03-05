@@ -265,9 +265,14 @@ def handle_status():
 
 
 def handle_bets():
-    today = datetime.now(timezone.utc).date().isoformat()
-    bets  = get_all_bets(limit=200)
-    today_bets = [b for b in bets if b["match_date"] == today]
+    bets = get_all_bets(limit=200)
+    
+    # Filtre par date de création (created_at) pas match_date
+    from datetime import datetime
+    today = datetime.utcnow().date().isoformat()
+    
+    # Bets créés aujourd'hui (created_at commence par today)
+    today_bets = [b for b in bets if str(b.get("created_at", ""))[:10] == today]
 
     if not today_bets:
         send_message(
