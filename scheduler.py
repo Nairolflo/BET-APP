@@ -8,6 +8,7 @@ Commandes Telegram :
   /stats   → win rate + ROI
   /refresh → forcer refresh stats équipes
   /run     → lancer l'analyse maintenant
+  /web     → lacne la page web
 
 Commandes CLI :
   python scheduler.py run       → exécution immédiate
@@ -152,7 +153,7 @@ def run_value_bet_engine(silent=False):
             home_id, away_id     = fix["home_team_id"], fix["away_team_id"]
             home_name, away_name = fix["home_team_name"], fix["away_team_name"]
 
-            prediction = predict_match(home_id, away_id, strengths, avg_home, avg_away)
+            prediction = predict_match(home_name, away_name, strengths, avg_home, avg_away)
             if not prediction:
                 continue
 
@@ -314,6 +315,14 @@ def handle_refresh():
     send_message("🔄 <b>Refresh des stats en cours...</b>")
     t = threading.Thread(target=refresh_team_stats, daemon=True)
     t.start()
+    
+def handle_web():
+    url = os.getenv("WEB_URL", "")
+    if url:
+        send_message(f"🌐 <b>Interface Web ValueBet</b>\n\n👉 {url}")
+    else:
+        send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
+
 
 
 COMMANDS = {
@@ -323,6 +332,7 @@ COMMANDS = {
     "/stats":   handle_stats,
     "/run":     handle_run,
     "/refresh": handle_refresh,
+    "/web":     handle_web,
 }
 
 
