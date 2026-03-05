@@ -28,10 +28,9 @@ load_dotenv()
 
 from database import (
     init_db, save_bet, save_team_stats, get_team_stats,
-    get_all_bets, get_stats, is_bet_notified, mark_bet_notified,
-    delete_today_pending_bets, get_unique_bets
+    get_all_bets, get_stats, get_unique_bets, is_bet_notified, mark_bet_notified, delete_today_pending_bets, update_bet_result, get_pending_bets
 )
-from api_clients import get_fixtures, get_odds, get_team_standings
+from api_clients import get_fixtures, get_odds, get_team_standings, get_fixtures_results_batch
 from model import calc_league_averages, calc_attack_defense_strength, predict_match, find_value_bets
 from telegram_bot import send_message, send_daily_summary
 
@@ -94,6 +93,7 @@ def run_value_bet_engine(silent=False):
         return
 
     worker_state["running"] = True
+    delete_today_pending_bets()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     log.info("=" * 60)
     log.info(f"⚽ VALUE BET ENGINE — {now}")
@@ -244,7 +244,8 @@ def handle_help():
         "📊 /stats   — Win rate + ROI\n"
         "⚡ /run     — Lancer une analyse\n"
         "🔄 /refresh — Refresh stats équipes\n"
-        "🌐 /web     — Page web\n\n"
+        "🌐 /web     — Page web\n"\
+        "🏆 /results — Vérifier les résultats\n\n"
         f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
     )
 
@@ -355,6 +356,12 @@ def handle_web():
         send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
 
 
+
+def handle_results():
+    send_message("🔍 <b>Vérification des résultats en cours...</b>")
+    t = threading.Thread(target=check_results, daemon=True)
+    t.start()
+
 COMMANDS = {
     "/help":    handle_help,
     "/status":  handle_status,
@@ -363,6 +370,7 @@ COMMANDS = {
     "/run":     handle_run,
     "/refresh": handle_refresh,
     "/web":     handle_web,
+    "/results": handle_results,
 }
 
 
@@ -455,6 +463,11 @@ def run_scheduler():
         hour=SCHEDULER_HOUR, minute=0, id="daily_value_bets",
         kwargs={"silent": False}
     )
+    scheduler.add_job(
+        check_results, "cron",
+        hour=23, minute=0, id="check_results",
+        kwargs={"silent": False}
+    )
 
     log.info(f"⏰ Scheduler démarré — refresh 06h UTC, analyse {SCHEDULER_HOUR:02d}h UTC")
 
@@ -493,3 +506,116 @@ if __name__ == "__main__":
     else:
         print(f"Commande inconnue : {command}")
         print("Usage: python scheduler.py [run|refresh|schedule]")
+
+
+# ─────────────────────────────────────────────
+# VÉRIFICATION AUTOMATIQUE DES RÉSULTATS
+# ─────────────────────────────────────────────
+
+def check_results(silent=False):
+    """
+    Vérifie les résultats des bets en attente.
+    Compare le marché parié au score final et met à jour success (1=gagné, 0=perdu).
+    """
+    pending = get_pending_bets()
+    if not pending:
+        if not silent:
+            send_message("📭 Aucun bet en attente à vérifier.")
+        return
+
+    log.info(f"🔍 Vérification de {len(pending)} bets en attente...")
+
+    updated_won  = []
+    updated_lost = []
+
+    # Groupe les bets par date + league
+    from collections import defaultdict
+    by_date_league = defaultdict(list)
+    for bet in pending:
+        key = (bet["match_date"], bet["league"])
+        by_date_league[key].append(bet)
+
+    league_id_map = {"Ligue 1": 61, "Premier League": 39}
+
+    for (match_date, league_name), bets in by_date_league.items():
+        league_id = league_id_map.get(league_name)
+        if not league_id:
+            continue
+
+        # Récupère tous les résultats de cette journée en batch
+        results = get_fixtures_results_batch(league_id, SEASON, match_date)
+        if not results:
+            log.info(f"  Pas de résultats pour {league_name} le {match_date}")
+            continue
+
+        # Crée un lookup par noms d'équipes
+        from api_clients import get_fixtures as _get_fixtures
+        fixtures_day = _get_fixtures(league_id, SEASON, 30)
+        name_to_result = {}
+        for fix in fixtures_day:
+            fid = str(fix.get("fixture_id", ""))
+            if fid in results:
+                key = (fix["home_team_name"].lower(), fix["away_team_name"].lower())
+                name_to_result[key] = results[fid]
+
+        for bet in bets:
+            h_key = (bet["home_team"].lower(), bet["away_team"].lower())
+            result = name_to_result.get(h_key)
+            if not result:
+                continue
+
+            home_goals = result["home_goals"]
+            away_goals = result["away_goals"]
+            total      = home_goals + away_goals
+            market     = bet["market"]
+
+            # Détermine si le bet est gagné
+            success = None
+            if market == "Home Win":
+                success = 1 if home_goals > away_goals else 0
+            elif market == "Away Win":
+                success = 1 if away_goals > home_goals else 0
+            elif market == "Draw":
+                success = 1 if home_goals == away_goals else 0
+            elif market.startswith("Over "):
+                try:
+                    threshold = float(market.split(" ")[1])
+                    success = 1 if total > threshold else 0
+                except ValueError:
+                    pass
+            elif market.startswith("Under "):
+                try:
+                    threshold = float(market.split(" ")[1])
+                    success = 1 if total < threshold else 0
+                except ValueError:
+                    pass
+
+            if success is not None:
+                update_bet_result(bet["id"], success)
+                if success == 1:
+                    updated_won.append(bet)
+                    log.info(f"  ✅ GAGNÉ: {bet['home_team']} vs {bet['away_team']} | {market} ({home_goals}-{away_goals})")
+                else:
+                    updated_lost.append(bet)
+                    log.info(f"  ❌ PERDU: {bet['home_team']} vs {bet['away_team']} | {market} ({home_goals}-{away_goals})")
+
+    if not updated_won and not updated_lost:
+        log.info("  Aucun résultat disponible pour le moment.")
+        if not silent:
+            send_message("⏳ Résultats pas encore disponibles.")
+        return
+
+    msg = f"📊 <b>Résultats mis à jour</b>\n\n"
+    if updated_won:
+        msg += f"✅ <b>Gagnés ({len(updated_won)}) :</b>\n"
+        for b in updated_won:
+            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']}\n"
+    if updated_lost:
+        msg += f"\n❌ <b>Perdus ({len(updated_lost)}) :</b>\n"
+        for b in updated_lost:
+            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']}\n"
+
+    if not silent:
+        send_message(msg)
+
+    log.info(f"✅ {len(updated_won)} gagnés, {len(updated_lost)} perdus.")

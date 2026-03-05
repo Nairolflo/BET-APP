@@ -343,5 +343,106 @@ def get_odds(league_id: int) -> list:
 # FIXTURE RESULT
 # ─────────────────────────────────────────────
 
+
 def get_fixture_result(fixture_id) -> Optional[dict]:
-    return None
+    """
+    Récupère le résultat d'un match terminé via API-Football sur RapidAPI.
+    Retourne None si le match n'est pas terminé ou en cas d'erreur.
+    """
+    rapidapi_key = os.getenv("RAPIDAPI_KEY", "")
+    if not rapidapi_key:
+        return None
+
+    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+    headers = {
+        "X-RapidAPI-Key":  rapidapi_key,
+        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, params={"id": fixture_id}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_fixture_result] Erreur RapidAPI: {e}")
+        return None
+
+    response = data.get("response", [])
+    if not response:
+        return None
+
+    item   = response[0]
+    status = item.get("fixture", {}).get("status", {}).get("short", "")
+    goals  = item.get("goals", {})
+
+    if status not in ("FT", "AET", "PEN"):
+        return None  # Pas encore terminé
+
+    home_goals = goals.get("home")
+    away_goals = goals.get("away")
+
+    if home_goals is None or away_goals is None:
+        return None
+
+    return {
+        "home_goals": home_goals,
+        "away_goals": away_goals,
+        "status":     status,
+        "score":      f"{home_goals}-{away_goals}",
+    }
+
+
+def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
+    """
+    Récupère tous les résultats d'une journée via RapidAPI.
+    Retourne dict {fixture_id: result_dict}.
+    Utile pour vérifier les résultats en batch plutôt qu'un par un.
+    """
+    rapidapi_key = os.getenv("RAPIDAPI_KEY", "")
+    if not rapidapi_key:
+        return {}
+
+    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+    headers = {
+        "X-RapidAPI-Key":  rapidapi_key,
+        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
+    }
+
+    # Map league_id → API-Football league ID
+    league_map = {61: 61, 39: 39}
+    api_league = league_map.get(league_id)
+    if not api_league:
+        return {}
+
+    try:
+        resp = requests.get(url, headers=headers, params={
+            "league": api_league,
+            "season": season,
+            "date":   date,
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[get_fixtures_results_batch] Erreur RapidAPI: {e}")
+        return {}
+
+    results = {}
+    for item in data.get("response", []):
+        status = item.get("fixture", {}).get("status", {}).get("short", "")
+        if status not in ("FT", "AET", "PEN"):
+            continue
+
+        fixture_id = item.get("fixture", {}).get("id")
+        goals      = item.get("goals", {})
+        home_goals = goals.get("home")
+        away_goals = goals.get("away")
+
+        if fixture_id and home_goals is not None and away_goals is not None:
+            results[str(fixture_id)] = {
+                "home_goals": home_goals,
+                "away_goals": away_goals,
+                "status":     status,
+                "score":      f"{home_goals}-{away_goals}",
+            }
+
+    return results
