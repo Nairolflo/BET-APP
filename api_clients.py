@@ -344,105 +344,90 @@ def get_odds(league_id: int) -> list:
 # ─────────────────────────────────────────────
 
 
-def get_fixture_result(fixture_id) -> Optional[dict]:
-    """
-    Récupère le résultat d'un match terminé via API-Football sur RapidAPI.
-    Retourne None si le match n'est pas terminé ou en cas d'erreur.
-    """
-    rapidapi_key = os.getenv("RAPIDAPI_KEY", "")
-    if not rapidapi_key:
-        return None
 
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
-    headers = {
-        "X-RapidAPI-Key":  rapidapi_key,
-        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
-    }
+# ─────────────────────────────────────────────
+# RÉSULTATS — football-data.org
+# ─────────────────────────────────────────────
 
-    try:
-        resp = requests.get(url, headers=headers, params={"id": fixture_id}, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[get_fixture_result] Erreur RapidAPI: {e}")
-        return None
+FOOTBALLDATA_LEAGUE_MAP = {
+    39: "PL",   # Premier League
+    61: "FL1",  # Ligue 1
+}
 
-    response = data.get("response", [])
-    if not response:
-        return None
+FOOTBALLDATA_BASE = "https://api.football-data.org/v4"
 
-    item   = response[0]
-    status = item.get("fixture", {}).get("status", {}).get("short", "")
-    goals  = item.get("goals", {})
 
-    if status not in ("FT", "AET", "PEN"):
-        return None  # Pas encore terminé
-
-    home_goals = goals.get("home")
-    away_goals = goals.get("away")
-
-    if home_goals is None or away_goals is None:
-        return None
-
-    return {
-        "home_goals": home_goals,
-        "away_goals": away_goals,
-        "status":     status,
-        "score":      f"{home_goals}-{away_goals}",
-    }
+def _footballdata_headers() -> dict:
+    return {"X-Auth-Token": os.getenv("FOOTBALLDATA_KEY", "")}
 
 
 def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
     """
-    Récupère tous les résultats d'une journée via RapidAPI.
-    Retourne dict {fixture_id: result_dict}.
-    Utile pour vérifier les résultats en batch plutôt qu'un par un.
+    Récupère tous les résultats d'une journée via football-data.org.
+    Retourne dict {(home_name_lower, away_name_lower): result_dict}.
+    Couvre 1X2 ET Over/Under (total buts).
     """
-    rapidapi_key = os.getenv("RAPIDAPI_KEY", "")
-    if not rapidapi_key:
+    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    if not competition:
         return {}
 
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
-    headers = {
-        "X-RapidAPI-Key":  rapidapi_key,
-        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
-    }
-
-    # Map league_id → API-Football league ID
-    league_map = {61: 61, 39: 39}
-    api_league = league_map.get(league_id)
-    if not api_league:
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not key:
+        print("[get_fixtures_results_batch] FOOTBALLDATA_KEY manquante")
         return {}
+
+    url = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
+    params = {"dateFrom": date, "dateTo": date}
 
     try:
-        resp = requests.get(url, headers=headers, params={
-            "league": api_league,
-            "season": season,
-            "date":   date,
-        }, timeout=15)
+        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        print(f"[get_fixtures_results_batch] Erreur RapidAPI: {e}")
+        print(f"[get_fixtures_results_batch] Erreur football-data.org: {e}")
         return {}
 
     results = {}
-    for item in data.get("response", []):
-        status = item.get("fixture", {}).get("status", {}).get("short", "")
-        if status not in ("FT", "AET", "PEN"):
+    for match in data.get("matches", []):
+        status = match.get("status", "")
+        if status not in ("FINISHED",):
             continue
 
-        fixture_id = item.get("fixture", {}).get("id")
-        goals      = item.get("goals", {})
-        home_goals = goals.get("home")
-        away_goals = goals.get("away")
+        home = match.get("homeTeam", {}).get("name", "")
+        away = match.get("awayTeam", {}).get("name", "")
+        score = match.get("score", {})
+        full_time = score.get("fullTime", {})
+        home_goals = full_time.get("home")
+        away_goals = full_time.get("away")
 
-        if fixture_id and home_goals is not None and away_goals is not None:
-            results[str(fixture_id)] = {
-                "home_goals": home_goals,
-                "away_goals": away_goals,
-                "status":     status,
-                "score":      f"{home_goals}-{away_goals}",
-            }
+        if home_goals is None or away_goals is None:
+            continue
 
+        total = home_goals + away_goals
+        key_match = (home.lower(), away.lower())
+        results[key_match] = {
+            "home_goals": home_goals,
+            "away_goals": away_goals,
+            "total_goals": total,
+            "status": status,
+            "score": f"{home_goals}-{away_goals}",
+            "home_name": home,
+            "away_name": away,
+        }
+
+    print(f"[get_fixtures_results_batch] {len(results)} résultats trouvés pour {competition} le {date}")
     return results
+
+
+def get_today_results(league_id: int) -> dict:
+    """
+    Raccourci pour récupérer les résultats du jour.
+    """
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return get_fixtures_results_batch(league_id, 0, today)
+
+
+def get_fixture_result(fixture_id) -> Optional[dict]:
+    """Non utilisé — on passe par get_fixtures_results_batch."""
+    return None
