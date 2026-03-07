@@ -441,76 +441,6 @@ def telegram_polling():
 # SCHEDULER PRINCIPAL
 # ─────────────────────────────────────────────
 
-def run_scheduler():
-    """Démarre APScheduler + polling Telegram en parallèle."""
-    from apscheduler.schedulers.blocking import BlockingScheduler
-
-    worker_state["started_at"] = datetime.now(timezone.utc)
-
-    log.info("Démarrage thread polling Telegram...")
-    poll_thread = threading.Thread(target=telegram_polling, daemon=True)
-    poll_thread.start()
-    log.info("Thread polling démarré ✅")
-
-    scheduler = BlockingScheduler(timezone="UTC")
-    scheduler.add_job(
-        refresh_team_stats, "cron",
-        hour=6, minute=0, id="refresh_stats",
-        kwargs={"silent": True}
-    )
-    scheduler.add_job(
-        run_value_bet_engine, "cron",
-        hour=SCHEDULER_HOUR, minute=0, id="daily_value_bets",
-        kwargs={"silent": False}
-    )
-    scheduler.add_job(
-        check_results, "cron",
-        hour=23, minute=0, id="check_results",
-        kwargs={"silent": False}
-    )
-
-    log.info(f"⏰ Scheduler démarré — refresh 06h UTC, analyse {SCHEDULER_HOUR:02d}h UTC")
-
-    send_message(
-        f"✅ <b>Worker ValueBet démarré !</b>\n\n"
-        f"⏰ Refresh stats : 06h00 UTC\n"
-        f"⚽ Analyse value bets : {SCHEDULER_HOUR:02d}h00 UTC\n"
-        f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-        f"💬 Tapez /help pour voir les commandes."
-    )
-
-    try:
-        scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        log.info("Scheduler arrêté.")
-        send_message("🛑 <b>Worker ValueBet arrêté.</b>")
-
-
-# ─────────────────────────────────────────────
-# ENTRYPOINT
-# ─────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-
-    init_db()
-
-    command = sys.argv[1] if len(sys.argv) > 1 else "run"
-
-    if command == "refresh":
-        refresh_team_stats()
-    elif command == "schedule":
-        run_scheduler()
-    elif command == "run":
-        run_value_bet_engine()
-    else:
-        print(f"Commande inconnue : {command}")
-        print("Usage: python scheduler.py [run|refresh|schedule]")
-
-
-# ─────────────────────────────────────────────
-# VÉRIFICATION AUTOMATIQUE DES RÉSULTATS
-# ─────────────────────────────────────────────
 
 def check_results(silent=False):
     """
@@ -619,3 +549,74 @@ def check_results(silent=False):
         send_message(msg)
 
     log.info(f"✅ {len(updated_won)} gagnés, {len(updated_lost)} perdus.")
+
+def run_scheduler():
+    """Démarre APScheduler + polling Telegram en parallèle."""
+    from apscheduler.schedulers.blocking import BlockingScheduler
+
+    worker_state["started_at"] = datetime.now(timezone.utc)
+
+    log.info("Démarrage thread polling Telegram...")
+    poll_thread = threading.Thread(target=telegram_polling, daemon=True)
+    poll_thread.start()
+    log.info("Thread polling démarré ✅")
+
+    scheduler = BlockingScheduler(timezone="UTC")
+    scheduler.add_job(
+        refresh_team_stats, "cron",
+        hour=6, minute=0, id="refresh_stats",
+        kwargs={"silent": True}
+    )
+    scheduler.add_job(
+        run_value_bet_engine, "cron",
+        hour=SCHEDULER_HOUR, minute=0, id="daily_value_bets",
+        kwargs={"silent": False}
+    )
+    scheduler.add_job(
+        check_results, "cron",
+        hour=23, minute=0, id="check_results",
+        kwargs={"silent": False}
+    )
+
+    log.info(f"⏰ Scheduler démarré — refresh 06h UTC, analyse {SCHEDULER_HOUR:02d}h UTC")
+
+    send_message(
+        f"✅ <b>Worker ValueBet démarré !</b>\n\n"
+        f"⏰ Refresh stats : 06h00 UTC\n"
+        f"⚽ Analyse value bets : {SCHEDULER_HOUR:02d}h00 UTC\n"
+        f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+        f"💬 Tapez /help pour voir les commandes."
+    )
+
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Scheduler arrêté.")
+        send_message("🛑 <b>Worker ValueBet arrêté.</b>")
+
+
+# ─────────────────────────────────────────────
+# ENTRYPOINT
+# ─────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+
+    init_db()
+
+    command = sys.argv[1] if len(sys.argv) > 1 else "run"
+
+    if command == "refresh":
+        refresh_team_stats()
+    elif command == "schedule":
+        run_scheduler()
+    elif command == "run":
+        run_value_bet_engine()
+    else:
+        print(f"Commande inconnue : {command}")
+        print("Usage: python scheduler.py [run|refresh|schedule]")
+
+
+# ─────────────────────────────────────────────
+# VÉRIFICATION AUTOMATIQUE DES RÉSULTATS
+# ─────────────────────────────────────────────

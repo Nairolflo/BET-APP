@@ -1,8 +1,11 @@
 """
-model.py - Poisson-based football match prediction model
+model.py - Poisson + Market Combined Prediction Model
 
-Supporte tous les seuils Over/Under (1.5, 2.5, 3.5, 4.5...)
-retournés par The Odds API.
+Combine deux sources de probabilité :
+  1. Modèle Poisson (30%) — basé sur stats attaque/défense saison
+  2. Probabilité implicite des cotes (70%) — intègre forme, blessés, H2H, etc.
+
+La value bet est détectée quand la probabilité combinée > cote bookmaker.
 """
 
 import math
@@ -30,10 +33,6 @@ def calc_1x2(matrix) -> dict:
 
 
 def calc_over_under_threshold(matrix, threshold: float) -> tuple:
-    """
-    Calcule les probabilités Over/Under pour un seuil donné.
-    Retourne (prob_over, prob_under).
-    """
     over = sum(
         matrix[i][j]
         for i in range(len(matrix))
@@ -73,7 +72,7 @@ def calc_attack_defense_strength(team_stats: dict, league_avg_home: float, leagu
         away_scored_avg   = s["away_goals_scored"]    / a_games
         away_conceded_avg = s["away_goals_conceded"]  / a_games
 
-        name = s["team_name"]
+        name  = s["team_name"]
         entry = {
             "att_home": home_scored_avg   / max(league_avg_home, 0.01),
             "def_home": home_conceded_avg / max(league_avg_away, 0.01),
@@ -98,14 +97,53 @@ def _fuzzy_get(strengths: dict, name: str):
     return None
 
 
+def remove_bookmaker_margin(odds_dict: dict) -> dict:
+    """
+    Retire la marge bookmaker des cotes pour obtenir les probabilités vraies.
+    Utilise la méthode de normalisation simple (shin method approximation).
+    """
+    h2h_keys = ["home_win", "draw", "away_win"]
+
+    # Pour chaque groupe de marchés liés (1X2, Over/Under par seuil)
+    # on normalise séparément
+    result = {}
+
+    # 1X2
+    h2h_odds = {k: odds_dict[k] for k in h2h_keys if k in odds_dict and odds_dict[k]}
+    if len(h2h_odds) >= 2:
+        raw_probs = {k: 1 / v for k, v in h2h_odds.items()}
+        total = sum(raw_probs.values())
+        for k, p in raw_probs.items():
+            result[k] = p / total  # probabilité normalisée sans marge
+
+    # Over/Under par seuil
+    thresholds_seen = set()
+    for key in odds_dict:
+        if key.startswith("over_"):
+            suffix = key[5:]  # "2_5"
+            thresholds_seen.add(suffix)
+
+    for suffix in thresholds_seen:
+        over_key  = f"over_{suffix}"
+        under_key = f"under_{suffix}"
+        o_odd = odds_dict.get(over_key)
+        u_odd = odds_dict.get(under_key)
+        if o_odd and u_odd:
+            raw_over  = 1 / o_odd
+            raw_under = 1 / u_odd
+            total     = raw_over + raw_under
+            result[over_key]  = raw_over  / total
+            result[under_key] = raw_under / total
+
+    return result
+
+
 def predict_match(home_name: str, away_name: str, strengths: dict,
                   league_avg_home: float, league_avg_away: float,
                   ou_thresholds: list = None):
     """
     Prédit un match via Poisson.
-    ou_thresholds : liste de seuils Over/Under à calculer
-                    ex: [1.5, 2.5, 3.5, 4.5]
-                    Si None, calcule 1.5, 2.5, 3.5, 4.5 par défaut.
+    Retourne les probabilités du modèle (avant combinaison avec le marché).
     """
     h = _fuzzy_get(strengths, home_name)
     a = _fuzzy_get(strengths, away_name)
@@ -133,7 +171,6 @@ def predict_match(home_name: str, away_name: str, strengths: dict,
         "btts_no":     probs_btts["btts_no"],
     }
 
-    # Calcul Over/Under pour tous les seuils demandés
     thresholds = ou_thresholds if ou_thresholds else [1.5, 2.5, 3.5, 4.5]
     for t in thresholds:
         key = str(t).replace(".", "_")
@@ -144,14 +181,30 @@ def predict_match(home_name: str, away_name: str, strengths: dict,
     return result
 
 
+def combine_probabilities(poisson_prob: float, market_prob: float,
+                           poisson_weight: float = 0.30) -> float:
+    """
+    Combine la probabilité Poisson et la probabilité implicite du marché.
+    Poids par défaut : 30% Poisson, 70% marché.
+    Le marché intègre forme récente, blessés, H2H — plus fiable que Poisson seul.
+    """
+    market_weight = 1.0 - poisson_weight
+    return poisson_prob * poisson_weight + market_prob * market_weight
+
+
 def find_value_bets(predictions: dict, odds: dict,
-                    value_threshold: float = 0.05, min_prob: float = 0.55):
+                    value_threshold: float = 0.05, min_prob: float = 0.55,
+                    poisson_weight: float = 0.30):
     """
-    Compare les probabilités du modèle aux cotes bookmakers.
-    Gère les marchés 1X2 ET tous les Over/Under dynamiquement.
-    Retourne UN seul bet par marché — le bookmaker avec la meilleure cote.
+    Détecte les value bets en combinant :
+      - Probabilité Poisson (30%)
+      - Probabilité implicite des cotes (70%)
+
+    Un value bet existe quand prob_combinée > prob_implicite_brute
+    ET que la value dépasse le seuil.
+
+    Retourne UN seul bet par marché — le bookmaker avec la meilleure value.
     """
-    # Marchés fixes 1X2
     fixed_markets = {
         "home_win": "Home Win",
         "draw":     "Draw",
@@ -160,53 +213,68 @@ def find_value_bets(predictions: dict, odds: dict,
 
     best_per_market = {}
 
-    def check_market(market_key, market_label, prob, bk_odd, bk_name):
-        if prob is None or bk_odd is None:
-            return
-        if prob < min_prob:
-            return
-        value = (bk_odd * prob) - 1
-        if value <= value_threshold:
-            return
-        existing = best_per_market.get(market_key)
-        if existing is None or bk_odd > existing["bk_odds"]:
-            best_per_market[market_key] = {
-                "market":      market_label,
-                "bookmaker":   bk_name,
-                "bk_odds":     round(bk_odd, 3),
-                "model_odds":  round(1 / prob, 3),
-                "probability": round(prob, 4),
-                "value":       round(value, 4),
-            }
-
     for bk_name, bk_odds in odds.items():
+        # Retire la marge bookmaker pour obtenir probs vraies du marché
+        market_probs = remove_bookmaker_margin(bk_odds)
+
+        def check_market(market_key, market_label, poisson_p, bk_odd, market_p):
+            if poisson_p is None or bk_odd is None or market_p is None:
+                return
+            if bk_odd <= 1.0:
+                return
+
+            # Probabilité combinée
+            combined_p = combine_probabilities(poisson_p, market_p, poisson_weight)
+
+            if combined_p < min_prob:
+                return
+
+            value = (bk_odd * combined_p) - 1
+            if value <= value_threshold:
+                return
+
+            existing = best_per_market.get(market_key)
+            if existing is None or value > existing["value"]:
+                best_per_market[market_key] = {
+                    "market":        market_label,
+                    "bookmaker":     bk_name,
+                    "bk_odds":       round(bk_odd, 3),
+                    "model_odds":    round(1 / combined_p, 3),
+                    "probability":   round(combined_p, 4),
+                    "poisson_prob":  round(poisson_p, 4),
+                    "market_prob":   round(market_p, 4),
+                    "value":         round(value, 4),
+                }
+
         # 1X2
         for market_key, market_label in fixed_markets.items():
-            check_market(market_key, market_label,
-                         predictions.get(market_key),
-                         bk_odds.get(market_key),
-                         bk_name)
+            check_market(
+                market_key, market_label,
+                predictions.get(market_key),
+                bk_odds.get(market_key),
+                market_probs.get(market_key),
+            )
 
-        # Over/Under dynamiques — parcourt toutes les clés de la forme over_X_X / under_X_X
+        # Over/Under dynamiques
         for bk_key, bk_odd in bk_odds.items():
             if not (bk_key.startswith("over_") or bk_key.startswith("under_")):
                 continue
-
-            # bk_key ex: "over_2_5" → threshold_str = "2.5"
-            parts = bk_key.split("_", 1)  # ["over", "2_5"]
-            direction = parts[0]           # "over" ou "under"
-            threshold_str = parts[1].replace("_", ".")  # "2.5"
-
+            parts     = bk_key.split("_", 1)
+            direction = parts[0]
+            threshold_str = parts[1].replace("_", ".")
             try:
                 threshold = float(threshold_str)
             except ValueError:
                 continue
 
-            # Clé dans predictions
-            pred_key    = f"{direction}_{parts[1]}"
-            prob        = predictions.get(pred_key)
+            pred_key     = f"{direction}_{parts[1]}"
             market_label = f"{'Over' if direction == 'over' else 'Under'} {threshold}"
 
-            check_market(pred_key, market_label, prob, bk_odd, bk_name)
+            check_market(
+                pred_key, market_label,
+                predictions.get(pred_key),
+                bk_odd,
+                market_probs.get(pred_key),
+            )
 
     return sorted(best_per_market.values(), key=lambda x: x["value"], reverse=True)
