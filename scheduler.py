@@ -244,7 +244,10 @@ def handle_help():
         "📊 /stats   — Win rate + ROI\n"
         "⚡ /run     — Lancer une analyse\n"
         "🔄 /refresh — Refresh stats équipes\n"
-        "🌐 /web     — Page web\n"\
+        "🌐 /web      — Page web\n"\
+        "🏆 /results  — Vérifier les résultats\n"\
+        "📈 /pourcent — Taux de réussite\n"\
+        "🗑 /reset    — Effacer tous les paris\n"\
         "🏆 /results — Vérifier les résultats\n\n"
         f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
     )
@@ -362,6 +365,38 @@ def handle_results():
     t = threading.Thread(target=check_results, daemon=True)
     t.start()
 
+def handle_reset():
+    send_message("⚠️ <b>Suppression de tous les paris en cours...</b>")
+    from database import reset_all_bets
+    count = reset_all_bets()
+    send_message(f"🗑 <b>Reset effectué</b> — {count} paris supprimés.\n\nBase de données vierge ✅")
+
+def handle_pourcent():
+    from database import get_stats
+    stats = get_stats()
+    o = stats["overall"]
+    total   = o.get("total") or 0
+    wins    = o.get("wins") or 0
+    losses  = o.get("losses") or 0
+    pending = o.get("pending") or 0
+    settled = total - pending
+    if settled == 0:
+        send_message("📊 Aucun pari résolu pour le moment.\n💡 Tapez /results pour mettre à jour les résultats.")
+        return
+    win_rate = round(wins / settled * 100, 1)
+    roi      = round((wins - losses) / settled * 100, 1)
+    roi_sign = "+" if roi >= 0 else ""
+    send_message(
+        f"📈 <b>Taux de réussite</b>\n\n"
+        f"✅ Gagnés : <b>{wins}</b>\n"
+        f"❌ Perdus : <b>{losses}</b>\n"
+        f"⏳ En attente : <b>{pending}</b>\n"
+        f"📊 Total résolu : <b>{settled}</b>\n\n"
+        f"🎯 Taux de réussite : <b>{win_rate}%</b>\n"
+        f"💰 ROI : <b>{roi_sign}{roi}%</b>"
+    )
+
+
 COMMANDS = {
     "/help":    handle_help,
     "/status":  handle_status,
@@ -370,7 +405,9 @@ COMMANDS = {
     "/run":     handle_run,
     "/refresh": handle_refresh,
     "/web":     handle_web,
-    "/results": handle_results,
+    "/results":  handle_results,
+    "/reset":    handle_reset,
+    "/pourcent": handle_pourcent,
 }
 
 

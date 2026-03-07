@@ -440,17 +440,22 @@ def delete_today_pending_bets():
 
 
 def get_unique_bets(limit: int = 200) -> list:
+    """
+    Retourne les bets sans doublons.
+    Pour chaque combinaison home_team + away_team + market,
+    garde uniquement le plus récent.
+    """
     conn = get_connection()
     try:
         cur = conn.cursor()
         if is_postgres():
             cur.execute("""
-                SELECT DISTINCT ON (match_date, home_team, away_team, market)
+                SELECT DISTINCT ON (home_team, away_team, market)
                     id, match_date, league, home_team, away_team,
                     market, bookmaker, bk_odds, model_odds, probability,
                     value, success, notified, created_at
                 FROM bets
-                ORDER BY match_date, home_team, away_team, market, created_at DESC
+                ORDER BY home_team, away_team, market, created_at DESC
                 LIMIT %s
             """, (limit,))
         else:
@@ -461,11 +466,26 @@ def get_unique_bets(limit: int = 200) -> list:
                 FROM bets
                 WHERE id IN (
                     SELECT MAX(id) FROM bets
-                    GROUP BY match_date, home_team, away_team, market
+                    GROUP BY home_team, away_team, market
                 )
                 ORDER BY created_at DESC
                 LIMIT ?
             """, (limit,))
         return rows_to_dicts(cur, cur.fetchall())
+    finally:
+        conn.close()
+
+
+def reset_all_bets() -> int:
+    """Supprime tous les paris de la DB. Retourne le nombre supprimé."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM bets")
+        row = cur.fetchone()
+        count = row[0] if row else 0
+        cur.execute("DELETE FROM bets")
+        conn.commit()
+        return count
     finally:
         conn.close()
