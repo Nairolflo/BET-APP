@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Configuration — ValueBet{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>⚙️ Configuration</h1>
+    <p class="subtitle">Paramètres actifs du moteur de value bets</p>
+
+    <!-- Seuils modèle -->
+    <h2>🎯 Seuils du modèle</h2>
+    <div class="stat-grid" style="margin-bottom:2rem">
+        <div class="stat-card">
+            <div class="value" style="color:var(--yellow)">{{ config.value_threshold }}</div>
+            <div class="label">VALUE_THRESHOLD<br><span style="font-size:0.75rem;color:var(--text-dim)">Value minimum pour accepter un bet</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--accent2)">{{ config.min_probability }}</div>
+            <div class="label">MIN_PROBABILITY<br><span style="font-size:0.75rem;color:var(--text-dim)">Probabilité minimum du modèle</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--accent)">{{ config.poisson_weight }}</div>
+            <div class="label">POISSON_WEIGHT<br><span style="font-size:0.75rem;color:var(--text-dim)">Poids Poisson vs marché (50/50)</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--text)">{{ config.days_ahead }}</div>
+            <div class="label">DAYS_AHEAD<br><span style="font-size:0.75rem;color:var(--text-dim)">Jours à l'avance pour les matchs</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--text)">{{ config.top_bets_count }}</div>
+            <div class="label">TOP_BETS<br><span style="font-size:0.75rem;color:var(--text-dim)">Nombre max de bets envoyés</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color:var(--text)">{{ config.season }}</div>
+            <div class="label">SEASON<br><span style="font-size:0.75rem;color:var(--text-dim)">Saison en cours</span></div>
+        </div>
+    </div>
+
+    <!-- Filtres actifs -->
+    <h2>🔒 Filtres qualité actifs</h2>
+    <div class="card" style="margin-bottom:2rem">
+        <table>
+            <thead><tr><th>Filtre</th><th>Valeur</th><th>Objectif</th></tr></thead>
+            <tbody>
+                <tr><td>Fourchette de cotes</td><td><span class="badge badge-league">1.40 — 2.30</span></td><td>Favoris clairs uniquement</td></tr>
+                <tr><td>Nul (Draw)</td><td><span class="badge badge-loss">Exclu</span></td><td>Trop aléatoire</td></tr>
+                <tr><td>Under X.X</td><td><span class="badge badge-loss">Exclu</span></td><td>Moins prédictible</td></tr>
+                <tr><td>Over 1.5</td><td><span class="badge badge-loss">Exclu</span></td><td>Value quasi nulle</td></tr>
+                <tr><td>Over autorisés</td><td><span class="badge badge-win">2.5 et 3.5</span></td><td>Matchs offensifs confirmés</td></tr>
+                <tr><td>Écart Poisson/marché</td><td><span class="badge badge-league">&lt; 15%</span></td><td>Les deux modèles d'accord</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Ligues -->
+    <h2>🏆 Ligues analysées</h2>
+    <div class="stat-grid" style="margin-bottom:2rem">
+        {% for league in config.leagues %}
+        <div class="stat-card">
+            <div class="value" style="font-size:1.2rem">{{ league.flag }}</div>
+            <div class="label" style="margin-top:0.5rem;font-size:0.9rem;color:var(--text)">{{ league.name }}</div>
+            <div class="label">ID {{ league.id }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Scheduler -->
+    <h2>⏰ Planification</h2>
+    <div class="card" style="margin-bottom:2rem">
+        <table>
+            <thead><tr><th>Job</th><th>Heure UTC</th><th>Description</th></tr></thead>
+            <tbody>
+                <tr><td>🚀 Analyse quotidienne</td><td><span class="badge badge-league">{{ config.scheduler_hour }}h00</span></td><td>Calcul value bets et envoi Telegram</td></tr>
+                <tr><td>📊 Vérification résultats</td><td><span class="badge badge-league">23h00</span></td><td>Mise à jour W/L des bets passés</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- APIs -->
+    <h2>🔌 APIs connectées</h2>
+    <div class="card">
+        <table>
+            <thead><tr><th>API</th><th>Usage</th><th>Statut</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td><b>The Odds API</b></td>
+                    <td>Fixtures + cotes bookmakers</td>
+                    <td><span class="badge {{ 'badge-win' if config.has_odds_key else 'badge-loss' }}">{{ '✅ Clé configurée' if config.has_odds_key else '❌ Manquante' }}</span></td>
+                </tr>
+                <tr>
+                    <td><b>football-data.org</b></td>
+                    <td>Standings réels + résultats</td>
+                    <td><span class="badge {{ 'badge-win' if config.has_footballdata_key else 'badge-loss' }}">{{ '✅ Clé configurée' if config.has_footballdata_key else '❌ Manquante' }}</span></td>
+                </tr>
+                <tr>
+                    <td><b>Telegram Bot</b></td>
+                    <td>Notifications + commandes</td>
+                    <td><span class="badge {{ 'badge-win' if config.has_telegram_token else 'badge-loss' }}">{{ '✅ Configuré' if config.has_telegram_token else '❌ Manquant' }}</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
