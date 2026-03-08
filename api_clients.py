@@ -1,26 +1,22 @@
 """
 api_clients.py - API wrappers
 
-- get_fixtures()          → The Odds API
-- get_team_standings()    → football-data.org standings réels + fallback
-- get_odds()              → The Odds API h2h + totals
-- get_all_results_today() → football-data.org résultats du jour
-- get_fixtures_results_batch() → résultats par ligue + date
-- normalize_team_name()   → normalisation noms équipes
+Sources :
+  - The Odds API   → fixtures + cotes
+  - football-data.org → standings, résultats, forme récente, H2H
 """
 
 import os
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
-
 
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
 
-ODDS_API_BASE      = "https://api.the-odds-api.com/v4"
-FOOTBALLDATA_BASE  = "https://api.football-data.org/v4"
+ODDS_API_BASE     = "https://api.the-odds-api.com/v4"
+FOOTBALLDATA_BASE = "https://api.football-data.org/v4"
 
 LEAGUE_SPORT_MAP = {
     39:  "soccer_epl",
@@ -40,7 +36,6 @@ LEAGUE_SPORT_MAP = {
     3:   "soccer_uefa_europa_league",
 }
 
-# league_id → code football-data.org pour standings + résultats
 FOOTBALLDATA_LEAGUE_MAP = {
     39:  "PL",
     61:  "FL1",
@@ -54,144 +49,84 @@ FOOTBALLDATA_LEAGUE_MAP = {
     2:   "CL",
 }
 
-# Mapping nom competition football-data.org → league_id
 FD_COMPETITION_TO_LEAGUE = {
-    "Premier League":          39,
-    "Ligue 1":                 61,
-    "Bundesliga":              78,
-    "Serie A":                 135,
-    "Primera Division":        140,
-    "Eredivisie":              88,
-    "Primeira Liga":           94,
-    "Championship":            40,
-    "UEFA Champions League":   2,
-    "UEFA Europa League":      3,
+    "Premier League":           39,
+    "Ligue 1":                  61,
+    "Bundesliga":               78,
+    "Serie A":                  135,
+    "Primera Division":         140,
+    "Eredivisie":               88,
+    "Primeira Liga":            94,
+    "Championship":             40,
+    "UEFA Champions League":    2,
+    "UEFA Europa League":       3,
     "Belgian First Division A": 144,
-    "Super Lig":               203,
-    "Scottish Premiership":    179,
-    "Série A":                 71,
-    "Liga MX":                 262,
+    "Super Lig":                203,
+    "Scottish Premiership":     179,
+    "Série A":                  71,
+    "Liga MX":                  262,
 }
 
 PREFERRED_BOOKMAKERS = ["Betclic (FR)", "Winamax (FR)"]
 
-# Mapping noms football-data.org → noms The Odds API
 TEAM_NAME_MAP = {
     # Ligue 1
-    "fc nantes": "nantes",
-    "angers sco": "angers",
-    "aj auxerre": "auxerre",
-    "rc strasbourg alsace": "strasbourg",
-    "toulouse fc": "toulouse",
-    "olympique de marseille": "marseille",
-    "olympique lyonnais": "lyon",
-    "paris saint-germain fc": "paris saint germain",
-    "stade rennais fc": "rennes",
-    "losc lille": "lille",
-    "ogc nice": "nice",
-    "as monaco fc": "as monaco",
-    "rc lens": "rc lens",
-    "stade brestois 29": "brest",
-    "stade de reims": "reims",
-    "le havre ac": "le havre",
-    "montpellier hsc": "montpellier",
-    "as saint-etienne": "saint-etienne",
+    "fc nantes": "nantes", "angers sco": "angers", "aj auxerre": "auxerre",
+    "rc strasbourg alsace": "strasbourg", "toulouse fc": "toulouse",
+    "olympique de marseille": "marseille", "olympique lyonnais": "lyon",
+    "paris saint-germain fc": "paris saint germain", "stade rennais fc": "rennes",
+    "losc lille": "lille", "ogc nice": "nice", "as monaco fc": "as monaco",
+    "rc lens": "rc lens", "stade brestois 29": "brest", "stade de reims": "reims",
+    "le havre ac": "le havre", "montpellier hsc": "montpellier",
+    "as saint-etienne": "saint-etienne", "paris fc": "paris fc",
     # Premier League
-    "manchester city fc": "manchester city",
-    "arsenal fc": "arsenal",
-    "liverpool fc": "liverpool",
-    "chelsea fc": "chelsea",
-    "tottenham hotspur fc": "tottenham hotspur",
-    "manchester united fc": "manchester united",
-    "newcastle united fc": "newcastle united",
-    "aston villa fc": "aston villa",
-    "west ham united fc": "west ham united",
-    "brighton & hove albion fc": "brighton",
-    "wolverhampton wanderers fc": "wolverhampton wanderers",
-    "fulham fc": "fulham",
-    "brentford fc": "brentford",
-    "crystal palace fc": "crystal palace",
-    "everton fc": "everton",
-    "nottingham forest fc": "nottingham forest",
-    "bournemouth afc": "bournemouth",
-    "ipswich town fc": "ipswich town",
-    "leicester city fc": "leicester city",
-    "sunderland afc": "sunderland",
+    "manchester city fc": "manchester city", "arsenal fc": "arsenal",
+    "liverpool fc": "liverpool", "chelsea fc": "chelsea",
+    "tottenham hotspur fc": "tottenham hotspur", "manchester united fc": "manchester united",
+    "newcastle united fc": "newcastle united", "aston villa fc": "aston villa",
+    "west ham united fc": "west ham united", "brighton & hove albion fc": "brighton",
+    "wolverhampton wanderers fc": "wolverhampton wanderers", "fulham fc": "fulham",
+    "brentford fc": "brentford", "crystal palace fc": "crystal palace",
+    "everton fc": "everton", "nottingham forest fc": "nottingham forest",
+    "bournemouth afc": "bournemouth", "ipswich town fc": "ipswich town",
+    "leicester city fc": "leicester city", "sunderland afc": "sunderland",
     # Bundesliga
-    "fc bayern münchen": "bayern munich",
-    "fc bayern munchen": "bayern munich",
-    "borussia dortmund": "borussia dortmund",
-    "bayer 04 leverkusen": "bayer leverkusen",
-    "rb leipzig": "rb leipzig",
-    "eintracht frankfurt": "eintracht frankfurt",
-    "vfb stuttgart": "vfb stuttgart",
-    "sc freiburg": "sc freiburg",
-    "vfl wolfsburg": "wolfsburg",
-    "1. fsv mainz 05": "mainz",
-    "tsg 1899 hoffenheim": "hoffenheim",
-    "1. fc köln": "koln",
-    "fc augsburg": "augsburg",
-    "sv werder bremen": "werder bremen",
+    "fc bayern münchen": "bayern munich", "fc bayern munchen": "bayern munich",
+    "borussia dortmund": "borussia dortmund", "bayer 04 leverkusen": "bayer leverkusen",
+    "rb leipzig": "rb leipzig", "eintracht frankfurt": "eintracht frankfurt",
+    "vfb stuttgart": "vfb stuttgart", "sc freiburg": "sc freiburg",
+    "vfl wolfsburg": "wolfsburg", "1. fsv mainz 05": "mainz",
+    "tsg 1899 hoffenheim": "hoffenheim", "1. fc köln": "koln",
+    "fc augsburg": "augsburg", "sv werder bremen": "werder bremen",
     "1. fc union berlin": "union berlin",
     "borussia mönchengladbach": "borussia monchengladbach",
-    "hamburger sv": "hamburger sv",
     "1. fc heidenheim 1846": "heidenheim",
     # Serie A
-    "fc internazionale milano": "inter milan",
-    "ac milan": "ac milan",
-    "juventus fc": "juventus",
-    "ssc napoli": "napoli",
-    "as roma": "as roma",
-    "ss lazio": "lazio",
-    "atalanta bc": "atalanta",
-    "acf fiorentina": "fiorentina",
-    "bologna fc 1909": "bologna",
-    "torino fc": "torino",
-    "udinese calcio": "udinese",
-    "cagliari calcio": "cagliari",
-    "como 1907": "como",
-    "ac pisa 1909": "pisa",
+    "fc internazionale milano": "inter milan", "ac milan": "ac milan",
+    "juventus fc": "juventus", "ssc napoli": "napoli", "as roma": "as roma",
+    "ss lazio": "lazio", "atalanta bc": "atalanta", "acf fiorentina": "fiorentina",
+    "bologna fc 1909": "bologna", "torino fc": "torino", "udinese calcio": "udinese",
+    "cagliari calcio": "cagliari", "como 1907": "como",
     # La Liga
-    "real madrid cf": "real madrid",
-    "fc barcelona": "barcelona",
-    "club atletico de madrid": "atletico madrid",
-    "athletic club": "athletic bilbao",
-    "real sociedad de futbol": "real sociedad",
-    "villarreal cf": "villarreal",
-    "sevilla fc": "sevilla",
-    "real betis balompie": "real betis",
-    "ca osasuna": "osasuna",
-    "rcd mallorca": "mallorca",
-    "levante ud": "levante",
-    "girona fc": "girona",
+    "real madrid cf": "real madrid", "fc barcelona": "barcelona",
+    "club atletico de madrid": "atletico madrid", "athletic club": "athletic bilbao",
+    "real sociedad de futbol": "real sociedad", "villarreal cf": "villarreal",
+    "sevilla fc": "sevilla", "real betis balompie": "real betis",
+    "ca osasuna": "osasuna", "rcd mallorca": "mallorca", "girona fc": "girona",
     # Eredivisie
-    "psv eindhoven": "psv",
-    "afc ajax": "ajax",
-    "feyenoord": "feyenoord",
-    "az alkmaar": "az",
-    "fc groningen": "groningen",
-    "sbv excelsior": "excelsior",
-    "sc heerenveen": "heerenveen",
+    "psv eindhoven": "psv", "afc ajax": "ajax", "feyenoord": "feyenoord",
+    "az alkmaar": "az", "fc groningen": "groningen",
     # Primeira Liga
-    "sporting clube de portugal": "sporting cp",
-    "fc porto": "porto",
-    "sl benfica": "benfica",
-    "sporting clube de braga": "braga",
-    "gd estoril praia": "estoril",
-    "fc alverca": "alverca",
-    "avs": "avs",
-    "moreirense fc": "moreirense",
-    "cd nacional": "nacional",
-    "casa pia ac": "casa pia",
+    "sporting clube de portugal": "sporting cp", "fc porto": "porto",
+    "sl benfica": "benfica", "sporting clube de braga": "braga",
+    "moreirense fc": "moreirense", "cd nacional": "nacional", "casa pia ac": "casa pia",
 }
-
 
 # ─────────────────────────────────────────────
 # UTILS
 # ─────────────────────────────────────────────
 
 def normalize_team_name(name: str) -> str:
-    """Normalise un nom d'equipe pour le matching."""
     n = name.lower().strip()
     if n in TEAM_NAME_MAP:
         return TEAM_NAME_MAP[n]
@@ -201,7 +136,7 @@ def normalize_team_name(name: str) -> str:
     return n
 
 
-def _footballdata_headers() -> dict:
+def _fd_headers() -> dict:
     return {"X-Auth-Token": os.getenv("FOOTBALLDATA_KEY", "")}
 
 
@@ -221,60 +156,128 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 10) -> list:
         "markets":    "h2h",
         "oddsFormat": "decimal",
     }
-
     try:
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         events = resp.json()
     except Exception as e:
-        print(f"[get_fixtures] Erreur Odds API league {league_id}: {e}")
+        print(f"[get_fixtures] Erreur league {league_id}: {e}")
         return []
 
     now    = datetime.now(timezone.utc)
     cutoff = now.timestamp() + days_ahead * 86400
-
     fixtures = []
+
     for i, event in enumerate(events):
-        commence_str = event.get("commence_time", "")
         try:
-            commence_dt = datetime.fromisoformat(commence_str.replace("Z", "+00:00"))
-            commence_ts = commence_dt.timestamp()
+            ts = datetime.fromisoformat(
+                event.get("commence_time", "").replace("Z", "+00:00")
+            ).timestamp()
         except Exception:
             continue
-
-        # Inclut matchs jusqu'a 3h passes (en cours) et jusqu'a cutoff
-        if commence_ts < now.timestamp() - 10800 or commence_ts > cutoff:
+        if ts < now.timestamp() - 10800 or ts > cutoff:
             continue
-
         home = event.get("home_team", "")
         away = event.get("away_team", "")
-
         fixtures.append({
             "fixture_id":     event.get("id", f"odds_{i}"),
-            "date":           commence_str[:10],
-            "home_team_id":   hash(home) % 100000,
+            "date":           event.get("commence_time", "")[:10],
             "home_team_name": home,
-            "away_team_id":   hash(away) % 100000,
             "away_team_name": away,
+            "home_team_id":   abs(hash(home)) % 100000,
+            "away_team_id":   abs(hash(away)) % 100000,
             "league_id":      league_id,
         })
-
     return fixtures
+
+
+# ─────────────────────────────────────────────
+# ODDS — The Odds API
+# ─────────────────────────────────────────────
+
+def get_odds(league_id: int) -> list:
+    sport_key = LEAGUE_SPORT_MAP.get(league_id)
+    if not sport_key:
+        return []
+
+    url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
+    params = {
+        "apiKey":     os.getenv("ODDS_API_KEY", ""),
+        "regions":    "eu",
+        "markets":    "h2h,totals",
+        "oddsFormat": "decimal",
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        events = resp.json()
+    except Exception as e:
+        print(f"[get_odds] Erreur league {league_id}: {e}")
+        return []
+
+    results = []
+    for event in events:
+        home = event.get("home_team")
+        away = event.get("away_team")
+        all_bk = {}
+        pref_bk = {}
+
+        for bk in event.get("bookmakers", []):
+            bk_name = bk.get("title", bk.get("key", "Unknown"))
+            entry = {}
+            for mkt in bk.get("markets", []):
+                mkt_key = mkt.get("key")
+                if mkt_key == "h2h":
+                    outcomes = {o["name"]: o["price"] for o in mkt.get("outcomes", [])}
+                    entry["home_win"] = outcomes.get(home)
+                    entry["draw"]     = outcomes.get("Draw")
+                    entry["away_win"] = outcomes.get(away)
+                elif mkt_key == "totals":
+                    for o in mkt.get("outcomes", []):
+                        point = o.get("point")
+                        name  = o.get("name", "")
+                        price = o.get("price")
+                        if point is None or price is None:
+                            continue
+                        suffix = str(float(point)).replace(".", "_")
+                        if name.lower() == "over":
+                            entry[f"over_{suffix}"] = price
+                        elif name.lower() == "under":
+                            entry[f"under_{suffix}"] = price
+            if entry:
+                all_bk[bk_name] = entry
+                if bk_name in PREFERRED_BOOKMAKERS:
+                    pref_bk[bk_name] = entry
+
+        final = pref_bk if pref_bk else all_bk
+        if not final:
+            continue
+
+        results.append({
+            "date":      event.get("commence_time", "")[:10],
+            "home_team": home,
+            "away_team": away,
+            "odds":      final,
+            "event_id":  event.get("id"),
+            "league_id": league_id,
+        })
+    return results
 
 
 # ─────────────────────────────────────────────
 # TEAM STANDINGS — football-data.org + fallback
 # ─────────────────────────────────────────────
 
-# Stats de fallback par league_id
 FALLBACK_STATS = {
     78: [  # Bundesliga
-        ("Bayern Munich",30,8,12,10),("Bayer Leverkusen",26,12,14,14),("Borussia Dortmund",24,14,14,16),
-        ("RB Leipzig",24,12,14,14),("Eintracht Frankfurt",22,14,14,16),("VfB Stuttgart",22,14,12,16),
-        ("SC Freiburg",18,16,12,18),("Union Berlin",16,18,12,20),("Werder Bremen",18,18,12,18),
-        ("Borussia Monchengladbach",18,18,10,20),("Wolfsburg",16,18,10,20),("Mainz",16,18,10,20),
-        ("Augsburg",14,20,10,22),("Hoffenheim",14,20,10,22),("Heidenheim",12,22,8,24),
-        ("Hamburger SV",12,22,8,24),("Koln",10,24,6,26),("Bochum",10,24,6,26),
+        ("Bayern Munich",30,8,12,10),("Bayer Leverkusen",26,12,14,14),
+        ("Borussia Dortmund",24,14,14,16),("RB Leipzig",24,12,14,14),
+        ("Eintracht Frankfurt",22,14,14,16),("VfB Stuttgart",22,14,12,16),
+        ("SC Freiburg",18,16,12,18),("Union Berlin",16,18,12,20),
+        ("Werder Bremen",18,18,12,18),("Borussia Monchengladbach",18,18,10,20),
+        ("Wolfsburg",16,18,10,20),("Mainz",16,18,10,20),("Augsburg",14,20,10,22),
+        ("Hoffenheim",14,20,10,22),("Heidenheim",12,22,8,24),("Koln",10,24,6,26),
+        ("Bochum",10,24,6,26),("Hamburger SV",12,22,8,24),
     ],
     135: [  # Serie A
         ("Inter Milan",30,10,14,12),("AC Milan",26,12,14,14),("Juventus",26,12,12,14),
@@ -286,189 +289,198 @@ FALLBACK_STATS = {
         ("Parma",10,22,6,24),("Venezia",8,26,4,28),
     ],
     140: [  # La Liga
-        ("Real Madrid",36,8,14,10),("Barcelona",34,10,14,12),("Atletico Madrid",26,12,14,14),
-        ("Athletic Bilbao",24,12,14,14),("Real Sociedad",22,14,14,16),("Villarreal",22,14,12,16),
+        ("Real Madrid",36,8,14,10),("Barcelona",34,10,14,12),
+        ("Atletico Madrid",26,12,14,14),("Athletic Bilbao",24,12,14,14),
+        ("Real Sociedad",22,14,14,16),("Villarreal",22,14,12,16),
         ("Sevilla",20,16,12,18),("Real Betis",18,16,12,18),("Osasuna",16,18,10,20),
-        ("Mallorca",14,20,10,22),("Rayo Vallecano",14,18,10,20),("Celta Vigo",14,20,10,22),
-        ("Getafe",12,20,8,22),("Girona",16,16,12,18),("Levante",12,22,8,24),
+        ("Mallorca",14,20,10,22),("Rayo Vallecano",14,18,10,20),
+        ("Celta Vigo",14,20,10,22),("Getafe",12,20,8,22),("Girona",16,16,12,18),
         ("Alaves",10,22,6,24),("Las Palmas",10,22,6,24),("Valladolid",8,24,4,26),
-        ("Leganes",8,24,4,26),("Espanyol",10,22,6,24),
+        ("Leganes",8,24,4,26),("Espanyol",10,22,6,24),("Levante",12,22,8,24),
     ],
     88: [  # Eredivisie
         ("PSV",32,8,14,10),("Ajax",28,12,14,12),("Feyenoord",26,12,14,14),
         ("AZ",24,12,12,14),("Twente",22,14,12,16),("Utrecht",20,16,12,18),
-        ("Heerenveen",16,18,10,20),("Heracles",14,18,10,20),("NEC Nijmegen",14,20,10,22),
-        ("Sparta Rotterdam",12,22,8,24),("Excelsior",10,22,6,24),("Groningen",10,22,6,24),
+        ("Heerenveen",16,18,10,20),("Heracles",14,18,10,20),
+        ("NEC Nijmegen",14,20,10,22),("Sparta Rotterdam",12,22,8,24),
+        ("Excelsior",10,22,6,24),("Groningen",10,22,6,24),
         ("Go Ahead Eagles",12,20,8,22),("Fortuna Sittard",10,24,6,26),
         ("PEC Zwolle",8,24,4,26),("Almere City",10,24,6,26),
     ],
     94: [  # Primeira Liga
         ("Sporting CP",30,8,14,10),("Porto",28,10,14,12),("Benfica",28,10,12,12),
-        ("Braga",22,14,12,16),("Vitoria Guimaraes",18,16,10,18),("Estoril",14,18,10,20),
-        ("Famalicao",12,20,8,22),("Boavista",12,20,8,22),("Casa Pia",12,22,8,24),
-        ("Gil Vicente",10,22,6,24),("Moreirense",10,22,6,24),("Arouca",10,22,6,24),
-        ("Rio Ave",10,24,6,26),("Nacional",10,22,6,24),("Alverca",8,24,4,26),
-        ("AVS",8,24,4,26),("Estrela Amadora",8,26,4,28),("Chaves",8,26,4,28),
+        ("Braga",22,14,12,16),("Vitoria Guimaraes",18,16,10,18),
+        ("Estoril",14,18,10,20),("Famalicao",12,20,8,22),("Boavista",12,20,8,22),
+        ("Casa Pia",12,22,8,24),("Gil Vicente",10,22,6,24),
+        ("Moreirense",10,22,6,24),("Arouca",10,22,6,24),("Rio Ave",10,24,6,26),
+        ("Nacional",10,22,6,24),("Alverca",8,24,4,26),("AVS",8,24,4,26),
     ],
     144: [  # Belgium
-        ("Club Brugge",28,10,12,12),("Anderlecht",24,12,12,14),("Genk",22,14,12,16),
-        ("Gent",22,14,10,16),("Standard Liege",18,16,10,18),("Antwerp",18,16,10,18),
-        ("Union SG",20,14,12,16),("OH Leuven",14,18,10,20),("Cercle Brugge",14,18,8,20),
-        ("Westerlo",12,20,8,22),("Mechelen",12,20,8,22),("Charleroi",12,20,8,22),
-        ("Eupen",8,24,4,26),("RWDM",10,22,6,24),("Beerschot",8,26,4,28),
-        ("Dender",8,26,4,28),
+        ("Club Brugge",28,10,12,12),("Anderlecht",24,12,12,14),
+        ("Genk",22,14,12,16),("Gent",22,14,10,16),("Standard Liege",18,16,10,18),
+        ("Antwerp",18,16,10,18),("Union SG",20,14,12,16),("OH Leuven",14,18,10,20),
+        ("Cercle Brugge",14,18,8,20),("Westerlo",12,20,8,22),
+        ("Mechelen",12,20,8,22),("Charleroi",12,20,8,22),("Eupen",8,24,4,26),
+        ("RWDM",10,22,6,24),("Beerschot",8,26,4,28),("Dender",8,26,4,28),
     ],
     203: [  # Turkey
-        ("Galatasaray",30,10,14,12),("Fenerbahce",28,10,12,12),("Besiktas",24,12,12,14),
-        ("Trabzonspor",20,14,12,16),("Basaksehir",18,16,10,18),("Sivasspor",14,18,10,20),
-        ("Antalyaspor",14,18,8,20),("Konyaspor",12,20,8,22),("Kayserispor",10,22,6,24),
-        ("Kasimpasa",10,22,6,24),("Alanyaspor",12,20,8,22),("Rizespor",8,24,4,26),
-        ("Gaziantep",8,24,4,26),("Samsunspor",10,22,6,24),("Ankaraguco",10,22,6,24),
-        ("Eyupspor",10,22,6,24),("Bodrum",8,24,4,26),("Hatayspor",8,24,4,26),
+        ("Galatasaray",30,10,14,12),("Fenerbahce",28,10,12,12),
+        ("Besiktas",24,12,12,14),("Trabzonspor",20,14,12,16),
+        ("Basaksehir",18,16,10,18),("Sivasspor",14,18,10,20),
+        ("Antalyaspor",14,18,8,20),("Konyaspor",12,20,8,22),
+        ("Kayserispor",10,22,6,24),("Kasimpasa",10,22,6,24),
+        ("Alanyaspor",12,20,8,22),("Rizespor",8,24,4,26),
+        ("Gaziantep",8,24,4,26),("Samsunspor",10,22,6,24),
+        ("Ankaraguco",10,22,6,24),("Eyupspor",10,22,6,24),
     ],
     179: [  # Scottish Prem
         ("Celtic",32,6,14,8),("Rangers",28,10,12,12),("Hearts",20,14,12,16),
-        ("Aberdeen",18,16,10,18),("Hibernian",18,16,10,18),("Motherwell",14,18,8,20),
-        ("Livingston",12,20,8,22),("St Mirren",12,20,6,22),("Kilmarnock",10,22,6,24),
+        ("Aberdeen",18,16,10,18),("Hibernian",18,16,10,18),
+        ("Motherwell",14,18,8,20),("Livingston",12,20,8,22),
+        ("St Mirren",12,20,6,22),("Kilmarnock",10,22,6,24),
         ("Ross County",8,24,4,26),("St Johnstone",8,24,4,26),("Dundee",8,26,4,28),
     ],
-    262: [  # Liga MX
-        ("Club America",26,12,12,14),("Chivas",22,14,12,16),("Cruz Azul",20,14,10,16),
-        ("Tigres",24,12,12,14),("Monterrey",22,12,12,14),("Pumas",18,16,10,18),
-        ("Toluca",18,16,10,18),("Leon",16,18,10,20),("Atlas",14,18,8,20),
-        ("Pachuca",16,16,10,18),("Santos",14,20,8,22),("Queretaro",12,20,6,22),
-        ("Mazatlan",10,22,6,24),("Necaxa",10,22,6,24),("Tijuana",10,22,6,24),
-        ("Puebla",12,20,8,22),("Juarez",8,24,4,26),("San Luis",8,24,4,26),
+    40: [  # Championship
+        ("Sunderland",28,10,12,12),("Leeds United",26,10,12,12),
+        ("Burnley",24,12,12,14),("Sheffield United",22,12,10,14),
+        ("West Brom",20,14,10,16),("Norwich City",18,14,10,16),
+        ("Middlesbrough",18,14,8,16),("Millwall",16,14,8,16),
+        ("Swansea City",14,16,8,18),("Hull City",12,16,8,18),
+        ("Coventry City",12,18,6,20),("Stoke City",12,18,6,20),
+        ("Bristol City",10,18,6,20),("Preston",10,18,6,20),
+        ("Watford",12,16,8,18),("Blackburn",10,20,6,22),
+        ("Cardiff City",10,20,6,22),("QPR",8,22,4,24),
+        ("Derby County",10,20,6,22),("Plymouth Argyle",8,22,4,24),
+        ("Portsmouth",8,22,4,24),("Sheffield Wednesday",8,24,4,26),
     ],
     2: [  # Champions League
-        ("Real Madrid",36,6,14,8),("Manchester City",34,8,14,10),("Bayern Munich",30,8,12,10),
-        ("Paris Saint Germain",28,10,12,12),("Liverpool",28,10,12,10),("Arsenal",26,10,12,12),
-        ("Inter Milan",24,10,12,12),("Atletico Madrid",22,12,12,14),("Barcelona",26,10,12,12),
-        ("Borussia Dortmund",20,12,12,14),("Napoli",20,12,10,14),("Porto",18,14,10,16),
-        ("Benfica",18,14,10,16),("RB Leipzig",16,14,10,16),("PSV",16,14,8,16),
-        ("Bayer Leverkusen",22,12,10,14),("Aston Villa",16,14,10,16),("AC Milan",20,12,10,14),
-        ("Juventus",18,12,10,14),("Feyenoord",14,16,8,18),("Sporting CP",18,12,8,14),
+        ("Real Madrid",36,6,14,8),("Manchester City",34,8,14,10),
+        ("Bayern Munich",30,8,12,10),("Paris Saint Germain",28,10,12,12),
+        ("Liverpool",28,10,12,10),("Arsenal",26,10,12,12),
+        ("Inter Milan",24,10,12,12),("Atletico Madrid",22,12,12,14),
+        ("Barcelona",26,10,12,12),("Borussia Dortmund",20,12,12,14),
+        ("Napoli",20,12,10,14),("Porto",18,14,10,16),("Benfica",18,14,10,16),
+        ("RB Leipzig",16,14,10,16),("PSV",16,14,8,16),
+        ("Bayer Leverkusen",22,12,10,14),("Aston Villa",16,14,10,16),
+        ("AC Milan",20,12,10,14),("Juventus",18,12,10,14),
+        ("Feyenoord",14,16,8,18),("Sporting CP",18,12,8,14),
         ("Celtic",14,18,8,20),("Club Brugge",12,18,6,20),("Galatasaray",14,16,8,18),
     ],
     3: [  # Europa League
         ("Roma",22,14,10,16),("Sevilla",20,14,10,16),("Ajax",20,14,10,16),
-        ("Real Sociedad",18,14,10,16),("Manchester United",20,16,10,18),
-        ("Lyon",16,16,8,18),("Fiorentina",16,16,8,18),("Fenerbahce",16,14,8,16),
-        ("Olympiakos",14,16,8,18),("Rangers",16,16,8,18),("Marseille",18,16,10,18),
-        ("Villarreal",18,14,10,16),("Lazio",18,14,10,16),("Eintracht Frankfurt",18,14,10,16),
-        ("Athletic Bilbao",16,14,8,16),("Braga",14,16,8,18),("PAOK",12,16,6,18),
-        ("Anderlecht",14,16,8,18),
+        ("Manchester United",20,16,10,18),("Lyon",16,16,8,18),
+        ("Fiorentina",16,16,8,18),("Fenerbahce",16,14,8,16),
+        ("Olympiakos",14,16,8,18),("Rangers",16,16,8,18),
+        ("Marseille",18,16,10,18),("Villarreal",18,14,10,16),
+        ("Lazio",18,14,10,16),("Athletic Bilbao",16,14,8,16),
+        ("Braga",14,16,8,18),("Anderlecht",14,16,8,18),
     ],
     71: [  # Brasileirao
-        ("Flamengo",28,12,12,14),("Palmeiras",26,10,12,12),("Atletico Mineiro",24,12,12,14),
-        ("Fluminense",20,14,10,16),("Gremio",18,14,10,16),("Internacional",18,14,10,16),
-        ("Corinthians",18,16,10,18),("Sao Paulo",18,14,10,16),("Botafogo",16,14,8,16),
-        ("Santos",14,16,8,18),("Atletico GO",12,18,8,20),("Bragantino",14,16,8,18),
-        ("Fortaleza",14,16,8,18),("Bahia",12,18,6,20),("Vasco",12,18,6,20),
-        ("Cruzeiro",14,16,8,18),("Juventude",10,20,6,22),("Vitoria",8,22,4,24),
-        ("Criciuma",8,22,4,24),("Cuiaba",10,20,6,22),
+        ("Flamengo",28,12,12,14),("Palmeiras",26,10,12,12),
+        ("Atletico Mineiro",24,12,12,14),("Fluminense",20,14,10,16),
+        ("Internacional",18,14,10,16),("Corinthians",18,16,10,18),
+        ("Sao Paulo",18,14,10,16),("Botafogo",16,14,8,16),
+        ("Santos",14,16,8,18),("Fortaleza",14,16,8,18),
+        ("Bahia",12,18,6,20),("Vasco",12,18,6,20),("Cruzeiro",14,16,8,18),
+        ("Gremio",18,14,10,16),("Bragantino",14,16,8,18),
+        ("Atletico GO",12,18,8,20),("Juventude",10,20,6,22),
+        ("Vitoria",8,22,4,24),("Criciuma",8,22,4,24),("Cuiaba",10,20,6,22),
     ],
-    40: [  # Championship
-        ("Sunderland",28,10,12,12),("Leeds United",26,10,12,12),("Burnley",24,12,12,14),
-        ("Sheffield United",22,12,10,14),("West Brom",20,14,10,16),("Norwich City",18,14,10,16),
-        ("Middlesbrough",18,14,8,16),("Millwall",16,14,8,16),("Swansea City",14,16,8,18),
-        ("Hull City",12,16,8,18),("Coventry City",12,18,6,20),("Stoke City",12,18,6,20),
-        ("Bristol City",10,18,6,20),("Preston",10,18,6,20),("Watford",12,16,8,18),
-        ("Blackburn",10,20,6,22),("Cardiff City",10,20,6,22),("QPR",8,22,4,24),
-        ("Derby County",10,20,6,22),("Plymouth Argyle",8,22,4,24),
-        ("Portsmouth",8,22,4,24),("Sheffield Wednesday",8,24,4,26),
-        ("Ipswich Town",14,18,8,18),("Leicester City",16,16,10,16),
+    262: [  # Liga MX
+        ("Club America",26,12,12,14),("Chivas",22,14,12,16),
+        ("Cruz Azul",20,14,10,16),("Tigres",24,12,12,14),
+        ("Monterrey",22,12,12,14),("Pumas",18,16,10,18),("Toluca",18,16,10,18),
+        ("Leon",16,18,10,20),("Atlas",14,18,8,20),("Pachuca",16,16,10,18),
+        ("Santos",14,20,8,22),("Queretaro",12,20,6,22),("Mazatlan",10,22,6,24),
+        ("Necaxa",10,22,6,24),("Tijuana",10,22,6,24),("Puebla",12,20,8,22),
+        ("Juarez",8,24,4,26),("San Luis",8,24,4,26),
     ],
 }
 
 
 def get_team_standings(league_id: int, season: int) -> list:
-    """Standings via football-data.org. Fallback sur stats moyennes."""
+    """Standings via football-data.org avec fallback."""
     competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
     key = os.getenv("FOOTBALLDATA_KEY", "")
 
     if competition and key:
         try:
-            url = f"{FOOTBALLDATA_BASE}/competitions/{competition}/standings"
-            resp = requests.get(url, headers={"X-Auth-Token": key}, timeout=15)
+            url  = f"{FOOTBALLDATA_BASE}/competitions/{competition}/standings"
+            resp = requests.get(url, headers=_fd_headers(), timeout=15)
             resp.raise_for_status()
             data = resp.json()
-            standings = data.get("standings", [])
 
             table = None
-            for s in standings:
+            for s in data.get("standings", []):
                 if s.get("type") == "TOTAL":
                     table = s.get("table", [])
                     break
-            if not table and standings:
-                table = standings[0].get("table", [])
+            if not table:
+                standings = data.get("standings", [])
+                if standings:
+                    table = standings[0].get("table", [])
 
             if table:
                 teams = []
                 for entry in table:
-                    team_name     = entry.get("team", {}).get("name", "")
-                    if not team_name:
+                    name   = entry.get("team", {}).get("name", "")
+                    played = entry.get("playedGames", 0)
+                    gf     = entry.get("goalsFor", 0)
+                    ga     = entry.get("goalsAgainst", 0)
+                    if not name or played == 0:
                         continue
-                    games_played  = entry.get("playedGames", 0)
-                    goals_for     = entry.get("goalsFor", 0)
-                    goals_against = entry.get("goalsAgainst", 0)
-                    if games_played == 0:
-                        continue
-                    home_games = games_played // 2
-                    away_games = games_played - home_games
-                    home_gf    = int(goals_for * 0.55)
-                    away_gf    = goals_for - home_gf
-                    home_ga    = int(goals_against * 0.45)
-                    away_ga    = goals_against - home_ga
-                    norm_name  = normalize_team_name(team_name)
+                    hg = played // 2
+                    ag = played - hg
                     teams.append({
                         "league_id":           league_id,
                         "season":              season,
-                        "team_id":             abs(hash(norm_name)) % 100000,
-                        "team_name":           norm_name,
-                        "home_goals_scored":   home_gf,
-                        "home_goals_conceded": home_ga,
-                        "away_goals_scored":   away_gf,
-                        "away_goals_conceded": away_ga,
-                        "home_games":          home_games,
-                        "away_games":          away_games,
+                        "team_id":             abs(hash(normalize_team_name(name))) % 100000,
+                        "team_name":           normalize_team_name(name),
+                        "home_goals_scored":   int(gf * 0.55),
+                        "home_goals_conceded": int(ga * 0.45),
+                        "away_goals_scored":   gf - int(gf * 0.55),
+                        "away_goals_conceded": ga - int(ga * 0.45),
+                        "home_games":          hg,
+                        "away_games":          ag,
                     })
                 if teams:
-                    print(f"[get_team_standings] {len(teams)} equipes via football-data.org league {league_id}")
+                    print(f"[standings] {len(teams)} equipes via FD league {league_id}")
                     return teams
         except Exception as e:
-            print(f"[get_team_standings] Erreur football-data.org league {league_id}: {e}")
+            print(f"[standings] Erreur FD league {league_id}: {e}")
 
     return _fallback_stats(league_id, season)
 
 
 def _fallback_stats(league_id: int, season: int) -> list:
-    print(f"[fallback_stats] Stats moyennes — league {league_id}")
-
+    print(f"[fallback] Stats moyennes — league {league_id}")
     if league_id == 61:
         teams_data = [
             ("Paris Saint Germain",38,8,14,12),("Marseille",30,16,18,20),
             ("AS Monaco",28,14,16,18),("Lyon",26,16,16,20),("Lille",26,12,16,18),
             ("Nice",24,14,18,20),("RC Lens",24,12,16,18),("Rennes",22,16,18,22),
-            ("Strasbourg",20,18,16,20),("Montpellier",18,20,14,22),("Nantes",18,20,14,22),
-            ("Brest",20,18,16,20),("Reims",16,18,12,20),("Toulouse",18,20,14,22),
-            ("Le Havre",14,22,10,24),("Angers",12,24,8,26),("Paris FC",16,20,12,22),
-            ("Auxerre",18,20,14,22),("Saint-Etienne",12,24,8,26),("Havre AC",14,22,10,24),
+            ("Strasbourg",20,18,16,20),("Montpellier",18,20,14,22),
+            ("Nantes",18,20,14,22),("Brest",20,18,16,20),("Reims",16,18,12,20),
+            ("Toulouse",18,20,14,22),("Le Havre",14,22,10,24),
+            ("Angers",12,24,8,26),("Paris FC",16,20,12,22),
+            ("Auxerre",18,20,14,22),("Saint-Etienne",12,24,8,26),
         ]
     elif league_id == 39:
         teams_data = [
-            ("Manchester City",40,10,14,12),("Arsenal",36,12,14,14),("Liverpool",38,10,14,12),
-            ("Chelsea",30,14,16,16),("Tottenham Hotspur",28,16,16,18),("Manchester United",26,16,14,18),
-            ("Newcastle United",28,14,16,16),("Aston Villa",28,14,16,16),("West Ham United",22,18,14,20),
-            ("Brighton",24,16,16,18),("Wolverhampton",18,20,12,22),("Fulham",20,18,14,20),
-            ("Brentford",20,18,12,20),("Crystal Palace",16,20,10,22),("Everton",14,22,10,24),
-            ("Nottingham Forest",18,18,12,20),("Bournemouth",18,18,12,20),("Ipswich Town",14,22,10,24),
+            ("Manchester City",40,10,14,12),("Arsenal",36,12,14,14),
+            ("Liverpool",38,10,14,12),("Chelsea",30,14,16,16),
+            ("Tottenham Hotspur",28,16,16,18),("Manchester United",26,16,14,18),
+            ("Newcastle United",28,14,16,16),("Aston Villa",28,14,16,16),
+            ("West Ham United",22,18,14,20),("Brighton",24,16,16,18),
+            ("Wolverhampton",18,20,12,22),("Fulham",20,18,14,20),
+            ("Brentford",20,18,12,20),("Crystal Palace",16,20,10,22),
+            ("Everton",14,22,10,24),("Nottingham Forest",18,18,12,20),
+            ("Bournemouth",18,18,12,20),("Ipswich Town",14,22,10,24),
             ("Leicester City",16,20,12,22),("Sunderland",14,22,10,24),
         ]
     else:
         teams_data = FALLBACK_STATS.get(league_id, [])
         if not teams_data:
-            print(f"[fallback_stats] Aucune donnee pour league {league_id}")
             return []
 
     return [{
@@ -486,425 +498,53 @@ def _fallback_stats(league_id: int, season: int) -> list:
 
 
 # ─────────────────────────────────────────────
-# ODDS — The Odds API
+# FORME RECENTE — football-data.org
 # ─────────────────────────────────────────────
 
-def get_odds(league_id: int) -> list:
-    """Cotes h2h + totals depuis The Odds API."""
-    sport_key = LEAGUE_SPORT_MAP.get(league_id)
-    if not sport_key:
-        return []
+_form_cache = {}
 
-    url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
-    params = {
-        "apiKey":     os.getenv("ODDS_API_KEY", ""),
-        "regions":    "eu",
-        "markets":    "h2h,totals",
-        "oddsFormat": "decimal",
-    }
-
-    try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        events = resp.json()
-    except Exception as e:
-        print(f"[get_odds] Erreur league {league_id}: {e}")
-        return []
-
-    results = []
-    for event in events:
-        home     = event.get("home_team")
-        away     = event.get("away_team")
-        commence = event.get("commence_time", "")[:10]
-
-        all_bookmakers  = {}
-        pref_bookmakers = {}
-
-        for bk in event.get("bookmakers", []):
-            bk_name = bk.get("title", bk.get("key", "Unknown"))
-            entry   = {}
-
-            for mkt in bk.get("markets", []):
-                mkt_key = mkt.get("key")
-
-                if mkt_key == "h2h":
-                    outcomes = {o["name"]: o["price"] for o in mkt.get("outcomes", [])}
-                    entry["home_win"] = outcomes.get(home)
-                    entry["draw"]     = outcomes.get("Draw")
-                    entry["away_win"] = outcomes.get(away)
-
-                elif mkt_key == "totals":
-                    for o in mkt.get("outcomes", []):
-                        point = o.get("point")
-                        name  = o.get("name", "")
-                        price = o.get("price")
-                        if point is None or price is None:
-                            continue
-                        key_suffix = str(float(point)).replace(".", "_")
-                        if name.lower() == "over":
-                            entry[f"over_{key_suffix}"]  = price
-                        elif name.lower() == "under":
-                            entry[f"under_{key_suffix}"] = price
-
-            if entry:
-                all_bookmakers[bk_name] = entry
-                if bk_name in PREFERRED_BOOKMAKERS:
-                    pref_bookmakers[bk_name] = entry
-
-        final_odds = pref_bookmakers if pref_bookmakers else all_bookmakers
-        if not final_odds:
-            continue
-
-        results.append({
-            "date":      commence,
-            "home_team": home,
-            "away_team": away,
-            "odds":      final_odds,
-            "event_id":  event.get("id"),
-            "league_id": league_id,
-        })
-
-    return results
-
-
-# ─────────────────────────────────────────────
-# RESULTATS — football-data.org
-# ─────────────────────────────────────────────
-
-def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
-    """Resultats d'une journee pour une ligue via football-data.org."""
-    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
-    if not competition:
-        return {}
-
-    key = os.getenv("FOOTBALLDATA_KEY", "")
-    if not key:
-        print("[get_fixtures_results_batch] FOOTBALLDATA_KEY manquante")
-        return {}
-
-    url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
-    params = {"dateFrom": date, "dateTo": date}
-
-    try:
-        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[get_fixtures_results_batch] Erreur: {e}")
-        return {}
-
-    results = {}
-    for match in data.get("matches", []):
-        if match.get("status") != "FINISHED":
-            continue
-        home = match.get("homeTeam", {}).get("name", "")
-        away = match.get("awayTeam", {}).get("name", "")
-        ft   = match.get("score", {}).get("fullTime", {})
-        hg   = ft.get("home")
-        ag   = ft.get("away")
-        if hg is None or ag is None:
-            continue
-        result = {
-            "home_goals": hg, "away_goals": ag, "total_goals": hg + ag,
-            "status": "FINISHED", "score": f"{hg}-{ag}",
-            "home_name": home, "away_name": away,
-        }
-        results[(home.lower(), away.lower())] = result
-        results[(normalize_team_name(home), normalize_team_name(away))] = result
-
-    print(f"[get_fixtures_results_batch] {len(results)//2} resultats pour {competition} le {date}")
-    return results
-
-
-def get_all_results_today(date: str) -> dict:
+def get_recent_form(league_id: int, season: int) -> dict:
     """
-    Tous les resultats du jour toutes ligues via football-data.org.
-    Filtre uniquement les competitions connues dans FD_COMPETITION_TO_LEAGUE.
+    Récupère les 10 derniers matchs de chaque équipe pour calculer :
+      - Forme récente pondérée (matchs récents × 2, anciens × 1)
+      - Momentum (série victoires/défaites consécutives en cours)
+      - Fatigue (jours depuis dernier match)
+
+    Retourne dict : { team_name_norm: { "form_attack", "form_defense",
+                                        "momentum", "rest_days" } }
     """
-    key = os.getenv("FOOTBALLDATA_KEY", "")
-    if not key:
-        return {}
+    cache_key = f"form_{league_id}_{season}"
+    if cache_key in _form_cache:
+        return _form_cache[cache_key]
 
-    url    = f"{FOOTBALLDATA_BASE}/matches"
-    params = {"dateFrom": date, "dateTo": date}
-
-    try:
-        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[get_all_results_today] Erreur: {e}")
-        return {}
-
-    results = {}
-    skipped = 0
-    for match in data.get("matches", []):
-        if match.get("status") != "FINISHED":
-            continue
-        comp_name = match.get("competition", {}).get("name", "")
-        league_id = FD_COMPETITION_TO_LEAGUE.get(comp_name)
-        if league_id is None:
-            skipped += 1
-            continue
-        home = match.get("homeTeam", {}).get("name", "")
-        away = match.get("awayTeam", {}).get("name", "")
-        ft   = match.get("score", {}).get("fullTime", {})
-        hg   = ft.get("home")
-        ag   = ft.get("away")
-        if hg is None or ag is None:
-            continue
-        result = {
-            "home_goals": hg, "away_goals": ag, "total_goals": hg + ag,
-            "status": "FINISHED", "score": f"{hg}-{ag}",
-            "home_name": home, "away_name": away, "league_id": league_id,
-        }
-        results[(home.lower(), away.lower())] = result
-        results[(normalize_team_name(home), normalize_team_name(away))] = result
-
-    print(f"[get_all_results_today] {len(results)//2} resultats valides, {skipped} ignores pour le {date}")
-    return results
-
-
-def get_fixture_result(fixture_id) -> Optional[dict]:
-    """Non utilise — on passe par get_fixtures_results_batch."""
-    return None
-
-
-# ─────────────────────────────────────────────
-# H2H — football-data.org
-# ─────────────────────────────────────────────
-
-def get_upcoming_match_ids(league_id: int, days_ahead: int = 10) -> list:
-    """
-    Recupere les IDs football-data.org des prochains matchs d'une ligue.
-    Retourne une liste de dicts : {match_id, home_team, away_team, date}
-    """
     competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
     key = os.getenv("FOOTBALLDATA_KEY", "")
     if not competition or not key:
-        return []
+        return {}
 
-    from datetime import datetime, timezone, timedelta
-    now      = datetime.now(timezone.utc)
-    date_to  = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-    date_from = now.strftime("%Y-%m-%d")
-
-    url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
-    params = {"dateFrom": date_from, "dateTo": date_to, "status": "SCHEDULED"}
+    # Fetch les 60 derniers jours de matchs
+    today     = datetime.now(timezone.utc).date()
+    date_from = (today - timedelta(days=60)).isoformat()
+    date_to   = today.isoformat()
 
     try:
-        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
+        params = {"dateFrom": date_from, "dateTo": date_to, "status": "FINISHED"}
+        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
+        matches = resp.json().get("matches", [])
     except Exception as e:
-        print(f"[get_upcoming_match_ids] Erreur: {e}")
-        return []
-
-    matches = []
-    for m in data.get("matches", []):
-        matches.append({
-            "match_id":  m.get("id"),
-            "home_team": normalize_team_name(m.get("homeTeam", {}).get("name", "")),
-            "away_team": normalize_team_name(m.get("awayTeam", {}).get("name", "")),
-            "date":      m.get("utcDate", "")[:10],
-        })
-
-    print(f"[get_upcoming_match_ids] {len(matches)} matchs a venir pour {competition}")
-    return matches
-
-
-def get_h2h(match_id: int, limit: int = 10) -> dict:
-    """
-    Recupère l'historique H2H d'un match via football-data.org.
-    Retourne un dict avec les stats bête noire.
-
-    Format retourné :
-    {
-        "total":          int,   # nb matchs H2H
-        "home_wins":      int,   # victoires équipe domicile
-        "away_wins":      int,   # victoires équipe exterieur
-        "draws":          int,
-        "home_win_rate":  float, # 0.0 - 1.0
-        "away_win_rate":  float,
-        "bete_noire":     str|None,  # "home" | "away" | None
-        "bete_noire_rate": float,    # taux de domination
-    }
-    """
-    key = os.getenv("FOOTBALLDATA_KEY", "")
-    if not key or not match_id:
+        print(f"[get_recent_form] Erreur FD league {league_id}: {e}")
         return {}
-
-    url    = f"{FOOTBALLDATA_BASE}/matches/{match_id}/head2head"
-    params = {"limit": limit}
-
-    try:
-        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[get_h2h] Erreur match {match_id}: {e}")
-        return {}
-
-    aggregates = data.get("aggregates", {})
-    home_team  = aggregates.get("homeTeam", {})
-    away_team  = aggregates.get("awayTeam", {})
-    total      = aggregates.get("numberOfMatches", 0)
-
-    if total < 3:
-        return {}
-
-    home_wins = home_team.get("wins", 0)
-    away_wins = away_team.get("wins", 0)
-    draws     = total - home_wins - away_wins
-
-    home_win_rate = home_wins / total
-    away_win_rate = away_wins / total
-
-    # Détection bête noire : domination > 60% sur min 5 matchs
-    bete_noire      = None
-    bete_noire_rate = 0.0
-
-    if total >= 5:
-        if home_win_rate >= 0.60:
-            bete_noire      = "home"
-            bete_noire_rate = home_win_rate
-        elif away_win_rate >= 0.60:
-            bete_noire      = "away"
-            bete_noire_rate = away_win_rate
-
-    print(
-        f"[get_h2h] match {match_id}: {total} matchs, "
-        f"dom {home_wins}W/{draws}D/{away_wins}W ext | "
-        f"bete_noire={bete_noire} ({bete_noire_rate:.0%})"
-    )
-
-    return {
-        "total":           total,
-        "home_wins":       home_wins,
-        "away_wins":       away_wins,
-        "draws":           draws,
-        "home_win_rate":   round(home_win_rate, 3),
-        "away_win_rate":   round(away_win_rate, 3),
-        "bete_noire":      bete_noire,
-        "bete_noire_rate": round(bete_noire_rate, 3),
-    }
-
-
-def get_h2h_for_fixtures(league_id: int, days_ahead: int = 10) -> dict:
-    """
-    Recupere le H2H pour tous les prochains matchs d'une ligue.
-    Retourne un dict : {(home_norm, away_norm): h2h_dict}
-    Limite les requetes API (max 20 matchs).
-    """
-    upcoming = get_upcoming_match_ids(league_id, days_ahead)
-    h2h_map  = {}
-
-    for match in upcoming[:20]:  # max 20 requetes par ligue
-        match_id = match.get("match_id")
-        if not match_id:
-            continue
-        h2h = get_h2h(match_id)
-        if h2h:
-            key = (match["home_team"], match["away_team"])
-            h2h_map[key] = h2h
-
-    print(f"[get_h2h_for_fixtures] {len(h2h_map)} H2H récupérés pour league {league_id}")
-    return h2h_map
-
-
-# ─────────────────────────────────────────────
-# H2H — football-data.org
-# ─────────────────────────────────────────────
-
-def get_upcoming_match_ids(league_id: int, days_ahead: int = 10) -> list:
-    """
-    Recupere les matchs a venir via football-data.org pour avoir leurs IDs H2H.
-    Retourne une liste de dicts : {match_id, home, away, date}
-    """
-    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
-    key = os.getenv("FOOTBALLDATA_KEY", "")
-    if not competition or not key:
-        return []
-
-    from datetime import timedelta
-    now      = datetime.now(timezone.utc)
-    date_from = now.strftime("%Y-%m-%d")
-    date_to   = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-    url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
-    params = {"dateFrom": date_from, "dateTo": date_to, "status": "SCHEDULED,TIMED"}
-
-    try:
-        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[get_upcoming_match_ids] Erreur league {league_id}: {e}")
-        return []
-
-    matches = []
-    for m in data.get("matches", []):
-        match_id  = m.get("id")
-        home_name = m.get("homeTeam", {}).get("name", "")
-        away_name = m.get("awayTeam", {}).get("name", "")
-        date      = m.get("utcDate", "")[:10]
-        if match_id and home_name and away_name:
-            matches.append({
-                "match_id":  match_id,
-                "home":      home_name,
-                "away":      away_name,
-                "home_norm": normalize_team_name(home_name),
-                "away_norm": normalize_team_name(away_name),
-                "date":      date,
-            })
-
-    print(f"[get_upcoming_match_ids] {len(matches)} matchs a venir pour {competition}")
-    return matches
-
-
-def get_h2h(match_id: int, limit: int = 10) -> dict:
-    """
-    Recupere l'historique H2H d'un match via football-data.org.
-    Retourne un dict avec les stats utiles pour detecter une bete noire.
-    """
-    key = os.getenv("FOOTBALLDATA_KEY", "")
-    if not key:
-        return {}
-
-    url    = f"{FOOTBALLDATA_BASE}/matches/{match_id}/head2head"
-    params = {"limit": limit}
-
-    try:
-        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[get_h2h] Erreur match {match_id}: {e}")
-        return {}
-
-    matches       = data.get("matches", [])
-    aggregates    = data.get("aggregates", {})
-    home_team_agg = aggregates.get("homeTeam", {})
-    away_team_agg = aggregates.get("awayTeam", {})
 
     if not matches:
         return {}
 
-    # Calcul manuel depuis les matchs si aggregates incomplet
-    home_name = matches[0].get("homeTeam", {}).get("name", "") if matches else ""
-    away_name = matches[0].get("awayTeam", {}).get("name", "") if matches else ""
+    # Groupe par equipe — dernier match en premier
+    from collections import defaultdict
+    team_matches = defaultdict(list)
 
-    # On recupere les deux equipes impliquees dans ce match specifique
-    # (les H2H peuvent alterner domicile/exterieur)
-    team_a = home_name  # equipe consideree "home" dans le match a venir
-    team_b = away_name
-
-    wins_a  = 0
-    wins_b  = 0
-    draws   = 0
-    total   = 0
-
-    for m in matches:
+    for m in sorted(matches, key=lambda x: x.get("utcDate", ""), reverse=True):
         if m.get("status") != "FINISHED":
             continue
         ft = m.get("score", {}).get("fullTime", {})
@@ -913,172 +553,152 @@ def get_h2h(match_id: int, limit: int = 10) -> dict:
         if hg is None or ag is None:
             continue
 
-        h_name = m.get("homeTeam", {}).get("name", "")
-        a_name = m.get("awayTeam", {}).get("name", "")
-        total += 1
+        date_str  = m.get("utcDate", "")[:10]
+        home_name = normalize_team_name(m.get("homeTeam", {}).get("name", ""))
+        away_name = normalize_team_name(m.get("awayTeam", {}).get("name", ""))
 
-        if hg > ag:
-            # Equipe domicile gagne
-            if h_name == team_a or normalize_team_name(h_name) == normalize_team_name(team_a):
-                wins_a += 1
+        team_matches[home_name].append({
+            "date": date_str, "scored": hg, "conceded": ag,
+            "result": "W" if hg > ag else ("D" if hg == ag else "L"),
+            "is_home": True,
+        })
+        team_matches[away_name].append({
+            "date": date_str, "scored": ag, "conceded": hg,
+            "result": "W" if ag > hg else ("D" if ag == hg else "L"),
+            "is_home": False,
+        })
+
+    today_dt = datetime.now(timezone.utc).date()
+    result   = {}
+
+    for team_name, team_m in team_matches.items():
+        # Garde les 10 derniers matchs max
+        recent = team_m[:10]
+        if not recent:
+            continue
+
+        # Forme pondérée : matchs récents (idx 0-4) × poids 2, anciens × poids 1
+        total_weight    = 0
+        weighted_scored = 0.0
+        weighted_conceded = 0.0
+
+        for i, m in enumerate(recent):
+            weight = 2 if i < 5 else 1
+            weighted_scored   += m["scored"]   * weight
+            weighted_conceded += m["conceded"] * weight
+            total_weight += weight
+
+        avg_scored    = weighted_scored   / total_weight if total_weight else 1.2
+        avg_conceded  = weighted_conceded / total_weight if total_weight else 1.0
+
+        # Momentum : série en cours (victoires ou défaites consécutives)
+        momentum = 0
+        last_result = recent[0]["result"] if recent else None
+        for m in recent:
+            if m["result"] == last_result and last_result in ("W", "L"):
+                momentum += (1 if last_result == "W" else -1)
             else:
-                wins_b += 1
-        elif ag > hg:
-            # Equipe exterieur gagne
-            if a_name == team_a or normalize_team_name(a_name) == normalize_team_name(team_a):
-                wins_a += 1
-            else:
-                wins_b += 1
-        else:
-            draws += 1
+                break
 
-    if total == 0:
-        return {}
+        # Fatigue : jours depuis dernier match
+        try:
+            last_date = datetime.strptime(recent[0]["date"], "%Y-%m-%d").date()
+            rest_days = (today_dt - last_date).days
+        except Exception:
+            rest_days = 7  # valeur neutre
 
-    return {
-        "total":       total,
-        "wins_home":   wins_a,   # victoires equipe jouant a domicile dans le match a venir
-        "wins_away":   wins_b,   # victoires equipe jouant a l'exterieur dans le match a venir
-        "draws":       draws,
-        "win_rate_home": round(wins_a / total, 3),
-        "win_rate_away": round(wins_b / total, 3),
-        "match_id":    match_id,
-    }
+        result[team_name] = {
+            "avg_scored":   round(avg_scored, 3),
+            "avg_conceded": round(avg_conceded, 3),
+            "momentum":     momentum,      # positif = serie victoires, négatif = serie défaites
+            "rest_days":    rest_days,     # jours de repos depuis dernier match
+            "games_played": len(recent),
+        }
+
+    print(f"[get_recent_form] {len(result)} equipes — forme récente league {league_id}")
+    _form_cache[cache_key] = result
+    return result
 
 
-def build_h2h_lookup(league_id: int, days_ahead: int = 10) -> dict:
-    """
-    Construit un lookup {(home_norm, away_norm): h2h_stats} pour tous les matchs
-    a venir d'une ligue. Appele une fois par ligue au debut de run_value_bet_engine.
-    """
-    upcoming = get_upcoming_match_ids(league_id, days_ahead)
-    if not upcoming:
-        return {}
-
-    lookup = {}
-    for m in upcoming:
-        h2h = get_h2h(m["match_id"])
-        if h2h:
-            key = (m["home_norm"], m["away_norm"])
-            lookup[key] = h2h
-            print(
-                f"[H2H] {m['home']} vs {m['away']} : "
-                f"{h2h['wins_home']}W-{h2h['draws']}D-{h2h['wins_away']}L "
-                f"sur {h2h['total']} matchs"
-            )
-
-    return lookup
+def clear_form_cache():
+    global _form_cache
+    _form_cache = {}
 
 
 # ─────────────────────────────────────────────
 # H2H — football-data.org
 # ─────────────────────────────────────────────
 
-# Cache en mémoire pour éviter de refetch pendant un run
 _h2h_cache = {}
 
-def get_h2h(league_id: int, home_team: str, away_team: str, limit: int = 10) -> dict:
+def get_h2h(league_id: int, home_team: str, away_team: str, limit: int = 10) -> Optional[dict]:
     """
-    Récupère l'historique H2H entre deux équipes via football-data.org.
-
-    Stratégie :
-      1. Cherche les matchs à venir de la ligue pour trouver le match_id
-      2. Appelle /v4/matches/{id}/head2head?limit=10
-      3. Calcule win_rate_home et win_rate_away du point de vue du match actuel
-
-    Retourne dict avec :
-      {
-        "total":         int,
-        "home_wins":     int,
-        "away_wins":     int,
-        "draws":         int,
-        "win_rate_home": float,
-        "win_rate_away": float,
-      }
-    Retourne None si pas de données ou erreur.
+    Historique H2H entre deux équipes via football-data.org.
+    Retourne win_rate_home, win_rate_away, total matchs.
     """
-    cache_key = f"{league_id}_{normalize_team_name(home_team)}_{normalize_team_name(away_team)}"
+    h_norm    = normalize_team_name(home_team)
+    a_norm    = normalize_team_name(away_team)
+    cache_key = f"{league_id}_{h_norm}_{a_norm}"
+
     if cache_key in _h2h_cache:
         return _h2h_cache[cache_key]
 
     competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
     key = os.getenv("FOOTBALLDATA_KEY", "")
-
     if not competition or not key:
         return None
 
-    # Etape 1 : trouver le match_id dans les matchs à venir
-    from datetime import datetime, timezone, timedelta
-    today    = datetime.now(timezone.utc).date().isoformat()
-    future   = (datetime.now(timezone.utc).date() + timedelta(days=15)).isoformat()
+    # Trouve le match_id dans les matchs à venir
+    today  = datetime.now(timezone.utc).date().isoformat()
+    future = (datetime.now(timezone.utc).date() + timedelta(days=15)).isoformat()
 
     try:
         url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
         params = {"dateFrom": today, "dateTo": future}
-        resp   = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
         resp.raise_for_status()
         matches = resp.json().get("matches", [])
     except Exception as e:
         print(f"[get_h2h] Erreur fetch matchs: {e}")
         return None
 
-    # Cherche le match correspondant
     match_id = None
-    h_norm   = normalize_team_name(home_team)
-    a_norm   = normalize_team_name(away_team)
-
     for m in matches:
         fd_home = normalize_team_name(m.get("homeTeam", {}).get("name", ""))
         fd_away = normalize_team_name(m.get("awayTeam", {}).get("name", ""))
-        h_match = fd_home == h_norm or h_norm in fd_home or fd_home in h_norm
-        a_match = fd_away == a_norm or a_norm in fd_away or fd_away in a_norm
-        if h_match and a_match:
+        if (fd_home == h_norm or h_norm in fd_home or fd_home in h_norm) and \
+           (fd_away == a_norm or a_norm in fd_away or fd_away in a_norm):
             match_id = m.get("id")
             break
 
     if not match_id:
-        print(f"[get_h2h] Match non trouvé: {home_team} vs {away_team}")
         _h2h_cache[cache_key] = None
         return None
 
-    # Etape 2 : fetch le H2H
     try:
         url  = f"{FOOTBALLDATA_BASE}/matches/{match_id}/head2head"
-        params = {"limit": limit}
-        resp = requests.get(url, headers=_footballdata_headers(), params=params, timeout=15)
+        resp = requests.get(url, headers=_fd_headers(), params={"limit": limit}, timeout=15)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        print(f"[get_h2h] Erreur fetch H2H match {match_id}: {e}")
+        print(f"[get_h2h] Erreur H2H match {match_id}: {e}")
         _h2h_cache[cache_key] = None
         return None
 
-    agg  = data.get("aggregates", {})
-    total = agg.get("numberOfMatches", 0)
-    if total < 5:
-        print(f"[get_h2h] Pas assez de matchs H2H ({total}) pour {home_team} vs {away_team}")
-        _h2h_cache[cache_key] = None
-        return None
-
-    # Victoires du point de vue du match actuel (home = equipe domicile aujourd'hui)
-    home_id = None
-    away_id = None
     h2h_matches = data.get("matches", [])
-    if h2h_matches:
-        # Cherche les IDs des équipes dans les matchs H2H
-        for m in h2h_matches:
-            home_name_fd = m.get("homeTeam", {}).get("name", "")
-            away_name_fd = m.get("awayTeam", {}).get("name", "")
-            if normalize_team_name(home_name_fd) == h_norm or h_norm in normalize_team_name(home_name_fd):
-                home_id = m.get("homeTeam", {}).get("id")
-            if normalize_team_name(away_name_fd) == a_norm or a_norm in normalize_team_name(away_name_fd):
-                away_id = m.get("awayTeam", {}).get("id")
-            if home_id and away_id:
-                break
+    home_wins = away_wins = draws = 0
+    home_id   = None
+    away_id   = None
 
-    home_wins = 0
-    away_wins = 0
-    draws     = 0
+    for m in h2h_matches:
+        fd_home = normalize_team_name(m.get("homeTeam", {}).get("name", ""))
+        if fd_home == h_norm or h_norm in fd_home:
+            home_id = m.get("homeTeam", {}).get("id")
+        fd_away = normalize_team_name(m.get("awayTeam", {}).get("name", ""))
+        if fd_away == a_norm or a_norm in fd_away:
+            away_id = m.get("awayTeam", {}).get("id")
+        if home_id and away_id:
+            break
 
     for m in h2h_matches:
         if m.get("status") != "FINISHED":
@@ -1088,22 +708,18 @@ def get_h2h(league_id: int, home_team: str, away_team: str, limit: int = 10) -> 
         ag = ft.get("away")
         if hg is None or ag is None:
             continue
-
         m_home_id = m.get("homeTeam", {}).get("id")
         m_away_id = m.get("awayTeam", {}).get("id")
-
         if hg == ag:
             draws += 1
         elif hg > ag:
-            # Equipe domicile de ce match H2H a gagné
             if home_id and m_home_id == home_id:
-                home_wins += 1  # notre equipe domicile a gagné
+                home_wins += 1
             elif away_id and m_home_id == away_id:
-                away_wins += 1  # notre equipe extérieure a gagné en jouant à domicile
+                away_wins += 1
             else:
-                home_wins += 1  # par défaut
+                home_wins += 1
         else:
-            # Equipe extérieure de ce match H2H a gagné
             if away_id and m_away_id == away_id:
                 away_wins += 1
             elif home_id and m_away_id == home_id:
@@ -1111,31 +727,107 @@ def get_h2h(league_id: int, home_team: str, away_team: str, limit: int = 10) -> 
             else:
                 away_wins += 1
 
-    counted = home_wins + away_wins + draws
-    if counted == 0:
+    total = home_wins + away_wins + draws
+    if total < 5:
         _h2h_cache[cache_key] = None
         return None
 
     result = {
-        "total":         counted,
+        "total":         total,
         "home_wins":     home_wins,
         "away_wins":     away_wins,
         "draws":         draws,
-        "win_rate_home": round(home_wins / counted, 3),
-        "win_rate_away": round(away_wins / counted, 3),
+        "win_rate_home": round(home_wins / total, 3),
+        "win_rate_away": round(away_wins / total, 3),
     }
-
     print(
-        f"[get_h2h] {home_team} vs {away_team} | "
-        f"{home_wins}W-{draws}D-{away_wins}L sur {counted} matchs | "
+        f"[H2H] {home_team} vs {away_team} | "
+        f"{home_wins}W-{draws}D-{away_wins}L | "
         f"home={result['win_rate_home']:.0%} away={result['win_rate_away']:.0%}"
     )
-
     _h2h_cache[cache_key] = result
     return result
 
 
 def clear_h2h_cache():
-    """Vide le cache H2H (appeler au debut de chaque run)."""
     global _h2h_cache
     _h2h_cache = {}
+
+
+# ─────────────────────────────────────────────
+# RESULTATS — football-data.org
+# ─────────────────────────────────────────────
+
+def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
+    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    if not competition:
+        return {}
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not key:
+        return {}
+
+    try:
+        url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
+        params = {"dateFrom": date, "dateTo": date}
+        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data   = resp.json()
+    except Exception as e:
+        print(f"[results_batch] Erreur: {e}")
+        return {}
+
+    results = {}
+    for m in data.get("matches", []):
+        if m.get("status") != "FINISHED":
+            continue
+        home = m.get("homeTeam", {}).get("name", "")
+        away = m.get("awayTeam", {}).get("name", "")
+        ft   = m.get("score", {}).get("fullTime", {})
+        hg   = ft.get("home")
+        ag   = ft.get("away")
+        if hg is None or ag is None:
+            continue
+        r = {"home_goals": hg, "away_goals": ag, "total_goals": hg + ag,
+             "status": "FINISHED", "score": f"{hg}-{ag}"}
+        results[(home.lower(), away.lower())] = r
+        results[(normalize_team_name(home), normalize_team_name(away))] = r
+
+    return results
+
+
+def get_all_results_today(date: str) -> dict:
+    key = os.getenv("FOOTBALLDATA_KEY", "")
+    if not key:
+        return {}
+    try:
+        url    = f"{FOOTBALLDATA_BASE}/matches"
+        params = {"dateFrom": date, "dateTo": date}
+        resp   = requests.get(url, headers=_fd_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        data   = resp.json()
+    except Exception as e:
+        print(f"[all_results] Erreur: {e}")
+        return {}
+
+    results = {}
+    for m in data.get("matches", []):
+        if m.get("status") != "FINISHED":
+            continue
+        comp      = m.get("competition", {}).get("name", "")
+        league_id = FD_COMPETITION_TO_LEAGUE.get(comp)
+        if league_id is None:
+            continue
+        home = m.get("homeTeam", {}).get("name", "")
+        away = m.get("awayTeam", {}).get("name", "")
+        ft   = m.get("score", {}).get("fullTime", {})
+        hg   = ft.get("home")
+        ag   = ft.get("away")
+        if hg is None or ag is None:
+            continue
+        r = {"home_goals": hg, "away_goals": ag, "total_goals": hg + ag,
+             "status": "FINISHED", "score": f"{hg}-{ag}", "league_id": league_id}
+        results[(home.lower(), away.lower())] = r
+        results[(normalize_team_name(home), normalize_team_name(away))] = r
+
+    print(f"[all_results] {len(results)//2} résultats pour le {date}")
+    return results
