@@ -2,68 +2,80 @@
 {% block title %}Historique — ValueBet Bot{% endblock %}
 {% block content %}
 <div class="container">
-    <h1>📋 Historique des paris</h1>
-    <p class="subtitle">Tous les value bets détectés, triés par date décroissante</p>
+    <div class="page-header">
+        <h1>📋 Historique des paris</h1>
+        <p>Tous les value bets détectés — filtres par marché, ligue, résultat</p>
+    </div>
 
     {% if bets %}
     <div class="card">
-        <div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
-            <input id="search" placeholder="🔍 Rechercher équipe, ligue..." style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;flex:1;min-width:200px;outline:none;">
-            <select id="filter-result" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;outline:none;">
+        <!-- Filtres -->
+        <div style="display:flex;gap:.8rem;margin-bottom:1.2rem;flex-wrap:wrap;align-items:center">
+            <input id="search" placeholder="🔍 Équipe, ligue..." style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;flex:1;min-width:180px;outline:none;font-size:.875rem">
+            <select id="filter-result" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;outline:none;font-size:.875rem">
                 <option value="">Tous les résultats</option>
-                <option value="1">Gagnés</option>
-                <option value="0">Perdus</option>
-                <option value="pending">En attente</option>
+                <option value="1">✅ Gagnés</option>
+                <option value="0">❌ Perdus</option>
+                <option value="-1">⏳ En attente</option>
             </select>
-            <select id="filter-league" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;outline:none;">
+            <select id="filter-market" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;outline:none;font-size:.875rem">
+                <option value="">Tous les marchés</option>
+                <option value="Home Win">🏠 Home Win</option>
+                <option value="Away Win">✈️ Away Win</option>
+                <option value="Over 2.5">⚽ Over 2.5</option>
+                <option value="Over 3.5">⚽ Over 3.5</option>
+            </select>
+            <select id="filter-league" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.5rem 1rem;border-radius:8px;outline:none;font-size:.875rem">
                 <option value="">Toutes les ligues</option>
-                <option value="Ligue 1">Ligue 1</option>
-                <option value="Premier League">Premier League</option>
+                {% for l in leagues %}
+                <option value="{{ l }}">{{ l }}</option>
+                {% endfor %}
             </select>
+            <label style="font-size:.8rem;color:var(--text-dim);display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                <input type="checkbox" id="filter-bn" style="accent-color:var(--accent)"> 🔥 Bête noire only
+            </label>
+            <span id="count" style="font-size:.8rem;color:var(--text-dim);margin-left:auto"></span>
         </div>
+
         <div class="table-wrap">
             <table id="bets-table">
                 <thead>
                     <tr>
-                        <th>Date</th>
-                        <th>Match</th>
-                        <th>Ligue</th>
-                        <th>Marché</th>
-                        <th>Bookmaker</th>
-                        <th>Cote BK</th>
-                        <th>Cote Modèle</th>
-                        <th>Proba</th>
-                        <th>Value</th>
-                        <th>Résultat</th>
-                        <th>Succès</th>
+                        <th>Date</th><th>Match</th><th>Ligue</th><th>Marché</th>
+                        <th>Bookmaker</th><th>Cote BK</th><th>Cote Mod.</th>
+                        <th>Proba</th><th>Value</th><th>Résultat</th>
                     </tr>
                 </thead>
                 <tbody id="bets-body">
-                {% for bet in bets %}
+                {% for b in bets %}
                 <tr
-                    data-success="{{ bet.success if bet.success is not none else 'pending' }}"
-                    data-league="{{ bet.league }}"
-                    data-search="{{ bet.home_team }} {{ bet.away_team }} {{ bet.league }} {{ bet.market }}"
+                    data-success="{{ b.success }}"
+                    data-market="{{ b.market }}"
+                    data-league="{{ b.league }}"
+                    data-bn="{{ '1' if b.bete_noire else '0' }}"
+                    data-search="{{ b.home_team }} {{ b.away_team }} {{ b.league }} {{ b.market }}"
                 >
-                    <td>{{ bet.match_date }}</td>
-                    <td><strong>{{ bet.home_team }}</strong> vs <strong>{{ bet.away_team }}</strong></td>
-                    <td><span class="badge badge-league">{{ bet.league }}</span></td>
-                    <td>{{ bet.market }}</td>
-                    <td>{{ bet.bookmaker }}</td>
-                    <td><strong>{{ bet.bk_odds }}</strong></td>
-                    <td style="color:var(--text-dim)">{{ bet.model_odds }}</td>
-                    <td>{{ "%.1f"|format(bet.probability * 100) }}%</td>
-                    <td class="{% if bet.value >= 0.10 %}value-high{% elif bet.value >= 0.05 %}value-mid{% else %}value-low{% endif %}">
-                        +{{ "%.1f"|format(bet.value * 100) }}%
-                    </td>
-                    <td>{{ bet.result or '—' }}</td>
+                    <td style="color:var(--text-dim);font-size:.8rem;white-space:nowrap">{{ b.match_date }}</td>
                     <td>
-                        {% if bet.success == 1 %}
-                            <span class="badge badge-win">✅ Oui</span>
-                        {% elif bet.success == 0 %}
-                            <span class="badge badge-loss">❌ Non</span>
+                        <strong>{{ b.home_team }}</strong> vs <strong>{{ b.away_team }}</strong>
+                        {% if b.bete_noire %}<span class="badge badge-bn" style="margin-left:.4rem">🔥</span>{% endif %}
+                    </td>
+                    <td><span class="badge badge-league">{{ b.league }}</span></td>
+                    <td><span class="badge badge-market">{{ b.market }}</span></td>
+                    <td style="font-size:.8rem;color:var(--text-dim)">{{ b.bookmaker }}</td>
+                    <td><strong>{{ b.bk_odds }}</strong></td>
+                    <td style="color:var(--text-dim)">{{ b.model_odds }}</td>
+                    <td>{{ "%.0f"|format((b.probability or 0) * 100) }}%</td>
+                    <td class="{% if (b.value or 0) >= 0.10 %}c-high{% elif (b.value or 0) >= 0.05 %}c-mid{% else %}c-low{% endif %}">
+                        +{{ "%.1f"|format((b.value or 0) * 100) }}%
+                    </td>
+                    <td>
+                        {% if b.success == 1 %}
+                            <span class="badge badge-win">✅ Gagné</span>
+                        {% elif b.success == 0 %}
+                            <span class="badge badge-loss">❌ Perdu</span>
                         {% else %}
-                            <span class="badge badge-pending">⏳ Attente</span>
+                            <span class="badge badge-pending">⏳</span>
                         {% endif %}
                     </td>
                 </tr>
@@ -73,29 +85,36 @@
         </div>
     </div>
     {% else %}
-    <div class="empty card">
-        <p style="font-size:3rem">📭</p>
-        <p>Aucun paris enregistré pour le moment.</p>
-        <p style="margin-top:.5rem">Lancez le scheduler pour commencer : <code>python scheduler.py run</code></p>
+    <div class="card empty">
+        <p style="font-size:2.5rem">📭</p>
+        <p style="margin-top:.5rem">Aucun paris enregistré pour le moment.</p>
     </div>
     {% endif %}
 </div>
-
 <script>
 function filterTable() {
-    const search = document.getElementById('search').value.toLowerCase();
-    const result = document.getElementById('filter-result').value;
-    const league = document.getElementById('filter-league').value;
-    const rows = document.querySelectorAll('#bets-body tr');
+    const search  = document.getElementById('search').value.toLowerCase();
+    const result  = document.getElementById('filter-result').value;
+    const market  = document.getElementById('filter-market').value;
+    const league  = document.getElementById('filter-league').value;
+    const bnOnly  = document.getElementById('filter-bn').checked;
+    const rows    = document.querySelectorAll('#bets-body tr');
+    let visible   = 0;
     rows.forEach(row => {
-        const matchSearch = !search || row.dataset.search.toLowerCase().includes(search);
-        const matchResult = !result || row.dataset.success === result;
-        const matchLeague = !league || row.dataset.league === league;
-        row.style.display = (matchSearch && matchResult && matchLeague) ? '' : 'none';
+        const ok =
+            (!search || row.dataset.search.toLowerCase().includes(search)) &&
+            (!result || row.dataset.success === result) &&
+            (!market || row.dataset.market === market) &&
+            (!league || row.dataset.league === league) &&
+            (!bnOnly || row.dataset.bn === '1');
+        row.style.display = ok ? '' : 'none';
+        if (ok) visible++;
     });
+    document.getElementById('count').textContent = `${visible} paris`;
 }
-document.getElementById('search').addEventListener('input', filterTable);
-document.getElementById('filter-result').addEventListener('change', filterTable);
-document.getElementById('filter-league').addEventListener('change', filterTable);
+['search','filter-result','filter-market','filter-league'].forEach(id =>
+    document.getElementById(id).addEventListener('input', filterTable));
+document.getElementById('filter-bn').addEventListener('change', filterTable);
+filterTable();
 </script>
 {% endblock %}

@@ -78,9 +78,11 @@ def init_db():
                     model_odds  REAL,
                     probability REAL,
                     value       REAL,
-                    success     INTEGER DEFAULT -1,
-                    notified    INTEGER DEFAULT 0,
-                    created_at  TIMESTAMP DEFAULT NOW()
+                    success          INTEGER DEFAULT -1,
+                    notified         INTEGER DEFAULT 0,
+                    bete_noire       INTEGER DEFAULT 0,
+                    bete_noire_rate  REAL DEFAULT 0,
+                    created_at       TIMESTAMP DEFAULT NOW()
                 )
             """)
             cur.execute("""
@@ -114,9 +116,11 @@ def init_db():
                     model_odds  REAL,
                     probability REAL,
                     value       REAL,
-                    success     INTEGER DEFAULT -1,
-                    notified    INTEGER DEFAULT 0,
-                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    success          INTEGER DEFAULT -1,
+                    notified         INTEGER DEFAULT 0,
+                    bete_noire       INTEGER DEFAULT 0,
+                    bete_noire_rate  REAL DEFAULT 0,
+                    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             cur.execute("""
@@ -177,8 +181,9 @@ def save_bet(bet: dict) -> int:
             cur.execute("""
                 INSERT INTO bets
                     (match_date, league, home_team, away_team, market,
-                     bookmaker, bk_odds, model_odds, probability, value)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     bookmaker, bk_odds, model_odds, probability, value,
+                     bete_noire, bete_noire_rate)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 bet.get("match_date"), bet.get("league"),
@@ -186,6 +191,8 @@ def save_bet(bet: dict) -> int:
                 bet.get("market"), bet.get("bookmaker"),
                 bet.get("bk_odds"), bet.get("model_odds"),
                 bet.get("probability"), bet.get("value"),
+                1 if bet.get("bete_noire") else 0,
+                bet.get("bete_noire_rate", 0),
             ))
             bet_id = cur.fetchone()[0]
         else:
@@ -487,5 +494,182 @@ def reset_all_bets() -> int:
         cur.execute("DELETE FROM bets")
         conn.commit()
         return count
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────
+# STATS PAR MARCHÉ (pour ROI séparé)
+# ─────────────────────────────────────────────
+
+def get_stats_by_market() -> list:
+    """ROI + win rate par type de marché : Home Win, Away Win, Over 2.5, etc."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        dedup = """
+            SELECT id, market, value, bk_odds, success
+            FROM bets
+            WHERE id IN (
+                SELECT MAX(id) FROM bets
+                GROUP BY home_team, away_team, market
+            )
+        """
+        cur.execute(f"""
+            SELECT
+                market,
+                COUNT(*) as total,
+                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN success = -1 THEN 1 ELSE 0 END) as pending,
+                ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value,
+                ROUND(CAST(AVG(bk_odds) AS NUMERIC), 2) as avg_odds
+            FROM ({dedup}) u
+            GROUP BY market
+            ORDER BY total DESC
+        """)
+        rows = rows_to_dicts(cur, cur.fetchall())
+        result = []
+        for r in rows:
+            settled = max((r.get("total") or 0) - (r.get("pending") or 0), 1)
+            wins    = r.get("wins") or 0
+            losses  = r.get("losses") or 0
+            result.append({
+                **r,
+                "win_rate": round(wins / settled * 100, 1),
+                "roi":      round((wins - losses) / settled * 100, 1),
+            })
+        return result
+    finally:
+        conn.close()
+
+
+def get_stats_by_league_detailed() -> list:
+    """Stats détaillées par ligue avec ROI."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        dedup = """
+            SELECT id, league, value, bk_odds, success
+            FROM bets
+            WHERE id IN (
+                SELECT MAX(id) FROM bets
+                GROUP BY home_team, away_team, market
+            )
+        """
+        cur.execute(f"""
+            SELECT
+                league,
+                COUNT(*) as total,
+                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN success = -1 THEN 1 ELSE 0 END) as pending,
+                ROUND(CAST(AVG(value) * 100 AS NUMERIC), 1) as avg_value,
+                ROUND(CAST(AVG(bk_odds) AS NUMERIC), 2) as avg_odds
+            FROM ({dedup}) u
+            GROUP BY league
+            ORDER BY total DESC
+        """)
+        rows = rows_to_dicts(cur, cur.fetchall())
+        result = []
+        for r in rows:
+            settled = max((r.get("total") or 0) - (r.get("pending") or 0), 1)
+            wins    = r.get("wins") or 0
+            losses  = r.get("losses") or 0
+            result.append({
+                **r,
+                "win_rate": round(wins / settled * 100, 1),
+                "roi":      round((wins - losses) / settled * 100, 1),
+            })
+        return result
+    finally:
+        conn.close()
+
+
+def get_bete_noire_bets(limit: int = 200) -> list:
+    """Retourne uniquement les bets avec flag bête noire."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        p = ph()
+        if is_postgres():
+            cur.execute("""
+                SELECT DISTINCT ON (home_team, away_team, market)
+                    id, match_date, league, home_team, away_team,
+                    market, bookmaker, bk_odds, model_odds, probability,
+                    value, success, bete_noire, bete_noire_rate
+                FROM bets
+                WHERE bete_noire = 1
+                ORDER BY home_team, away_team, market, created_at DESC
+                LIMIT %s
+            """, (limit,))
+        else:
+            cur.execute("""
+                SELECT id, match_date, league, home_team, away_team,
+                       market, bookmaker, bk_odds, model_odds, probability,
+                       value, success, bete_noire, bete_noire_rate
+                FROM bets
+                WHERE bete_noire = 1
+                  AND id IN (SELECT MAX(id) FROM bets GROUP BY home_team, away_team, market)
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+        return rows_to_dicts(cur, cur.fetchall())
+    finally:
+        conn.close()
+
+
+def get_roi_over_time() -> list:
+    """ROI cumulé par date pour le graphe d'évolution."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT match_date, success, value, bk_odds
+            FROM bets
+            WHERE success != -1
+              AND id IN (SELECT MAX(id) FROM bets GROUP BY home_team, away_team, market)
+            ORDER BY match_date ASC
+        """)
+        rows = rows_to_dicts(cur, cur.fetchall())
+        result = []
+        cumulative = 0.0
+        count = 0
+        for r in rows:
+            count += 1
+            if r["success"] == 1:
+                cumulative += (r["bk_odds"] - 1)
+            else:
+                cumulative -= 1
+            roi = round(cumulative / count * 100, 1)
+            result.append({"date": r["match_date"], "roi": roi, "count": count})
+        return result
+    finally:
+        conn.close()
+
+
+def get_streak() -> dict:
+    """Retourne la série en cours (victoires ou défaites consécutives)."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT success FROM bets
+            WHERE success != -1
+              AND id IN (SELECT MAX(id) FROM bets GROUP BY home_team, away_team, market)
+            ORDER BY created_at DESC
+            LIMIT 20
+        """)
+        rows = cur.fetchall()
+        if not rows:
+            return {"type": None, "count": 0}
+        first = rows[0][0]
+        count = 0
+        for r in rows:
+            if r[0] == first:
+                count += 1
+            else:
+                break
+        return {"type": "win" if first == 1 else "loss", "count": count}
     finally:
         conn.close()

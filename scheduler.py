@@ -225,11 +225,11 @@ def run_value_bet_engine(silent=False):
             if not odds:
                 continue
 
-            # H2H bête noire
+            # H2H bête noire — batch, pas d'appel API supplémentaire par match
             h2h = None
             if FOOTBALLDATA_LEAGUE_MAP.get(league_id):
                 try:
-                    h2h = get_h2h(league_id, home_name, away_name)
+                    h2h = get_h2h(league_id, home_name, away_name, match_date=fix["date"])
                     if h2h:
                         log.info(
                             f"  🔥 H2H {home_name} vs {away_name}: "
@@ -404,6 +404,7 @@ def handle_help():
         "🔄 /refresh  — Refresh stats équipes\n"
         "🏆 /results  — Vérifier les résultats\n"
         "🌐 /web      — Lien page web\n"
+        "📅 /today    — Paris du jour uniquement\n"
         "🗑 /reset    — Effacer tous les paris\n\n"
         f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
     )
@@ -436,45 +437,85 @@ def handle_bets():
     pending = [b for b in bets if b["success"] == -1]
 
     if not pending:
-        send_message("📭 <b>Aucun paris en attente.</b>\n💡 Tapez /run pour lancer une analyse.")
+        send_message("📭 <b>Aucun paris en attente.</b>\n💡 /run pour lancer une analyse.")
         return
 
-    msg = f"⏳ <b>Paris en attente</b> — {len(pending)} sélection(s)\n{'─'*32}\n\n"
-    for b in pending[:20]:
+    home_bets = [b for b in pending if b["market"] == "Home Win"]
+    away_bets = [b for b in pending if b["market"] == "Away Win"]
+    over_bets = [b for b in pending if b["market"] not in ("Home Win", "Away Win")]
+    bn_bets   = [b for b in pending if b.get("bete_noire")]
+
+    def fmt_bet(b):
         bn = " 🔥" if b.get("bete_noire") else ""
-        msg += (
-            f"⏳ <b>{b['home_team']} vs {b['away_team']}</b>{bn}\n"
-            f"   📅 {b['match_date']} — {b.get('league', '')}\n"
-            f"   📌 {b['market']} @ <b>{b['bk_odds']}</b>\n"
-            f"   💎 Value : <b>+{b['value']*100:.1f}%</b> | Proba : {b['probability']*100:.0f}%\n"
-            f"   🏦 {b['bookmaker']}\n\n"
+        return (
+            f"  <b>{b['home_team']} vs {b['away_team']}</b>{bn}\n"
+            f"  📅 {b['match_date']} · {b.get('league', '')}"
+            f" · @ <b>{b['bk_odds']}</b> · +{b['value']*100:.1f}% · {b['probability']*100:.0f}%\n"
         )
+
+    msg = f"⏳ <b>Paris en attente — {len(pending)} sélections</b>\n"
+    if home_bets:
+        msg += f"\n🏠 <b>Domicile ({len(home_bets)})</b>\n"
+        for b in home_bets[:8]: msg += fmt_bet(b)
+    if away_bets:
+        msg += f"\n✈️ <b>Extérieur ({len(away_bets)})</b>\n"
+        for b in away_bets[:8]: msg += fmt_bet(b)
+    if over_bets:
+        msg += f"\n⚽ <b>Over/Under ({len(over_bets)})</b>\n"
+        for b in over_bets[:8]: msg += fmt_bet(b)
+    if bn_bets:
+        msg += f"\n🔥 <b>Bête Noire ({len(bn_bets)})</b>\n"
+        for b in bn_bets[:5]: msg += fmt_bet(b)
     send_message(msg)
 
 
 def handle_stats():
-    stats     = get_stats()
-    o         = stats["overall"]
-    by_league = stats.get("by_league", [])
-    league_lines = ""
-    for row in by_league:
-        wins  = row.get("wins") or 0
-        total = row.get("total") or 0
-        wr    = round(wins / total * 100, 1) if total > 0 else 0
-        league_lines += f"\n  • {row['league']} : {wins}/{total} ({wr}%) | Value moy. +{row.get('avg_value') or 0}%"
-    roi      = o.get("roi") or 0
-    roi_sign = "+" if roi >= 0 else ""
-    send_message(
+    from database import get_stats_by_market, get_stats_by_league_detailed, get_streak
+    stats      = get_stats()
+    o          = stats["overall"]
+    by_market  = get_stats_by_market()
+    by_league  = get_stats_by_league_detailed()
+    streak     = get_streak()
+    roi        = o.get("roi") or 0
+    roi_sign   = "+" if roi >= 0 else ""
+
+    # Streak
+    streak_line = ""
+    if streak and streak.get("count", 0) > 1:
+        emoji = "🔥" if streak["type"] == "win" else "❄️"
+        label = "victoires" if streak["type"] == "win" else "défaites"
+        streak_line = f"\n{emoji} Série : <b>{streak['count']} {label} consécutives</b>"
+
+    # Meilleur marché
+    resolved = [m for m in by_market if (m.get("total",0) - m.get("pending",0)) >= 3]
+    best = max(resolved, key=lambda x: x.get("roi", -999)) if resolved else None
+    best_line = f"\n🏆 Meilleur marché : <b>{best['market']}</b> (+{best['roi']}% ROI)" if best else ""
+
+    msg = (
         f"📊 <b>Statistiques ValueBet</b>\n\n"
-        f"🎯 Paris totaux : <b>{o.get('total') or 0}</b>\n"
-        f"✅ Gagnés : <b>{o.get('wins') or 0}</b>\n"
-        f"❌ Perdus : <b>{o.get('losses') or 0}</b>\n"
-        f"⏳ En attente : <b>{o.get('pending') or 0}</b>\n\n"
-        f"📈 Taux de réussite : <b>{o.get('win_rate') or 0}%</b>\n"
-        f"💰 ROI : <b>{roi_sign}{roi}%</b>\n"
-        f"📉 Value moyenne : <b>+{o.get('avg_value_pct') or 0}%</b>\n"
-        f"\n<b>Par ligue :</b>{league_lines or ' Pas encore de données'}"
+        f"🎯 Total : <b>{o.get('total') or 0}</b> · ✅ {o.get('wins') or 0} · ❌ {o.get('losses') or 0} · ⏳ {o.get('pending') or 0}\n"
+        f"📈 Win rate : <b>{o.get('win_rate') or 0}%</b> · ROI : <b>{roi_sign}{roi}%</b>\n"
+        f"💎 Value moy. : <b>+{o.get('avg_value_pct') or 0}%</b>"
+        f"{streak_line}{best_line}\n"
     )
+
+    # Par marché
+    if by_market:
+        msg += "\n<b>Par marché :</b>\n"
+        for m in by_market:
+            roi_m = m.get("roi", 0)
+            s = "+" if roi_m >= 0 else ""
+            msg += f"  {m['market']} · {m.get('wins',0)}W/{m.get('losses',0)}L · WR {m.get('win_rate',0)}% · ROI {s}{roi_m}%\n"
+
+    # Par ligue (top 5)
+    if by_league:
+        msg += "\n<b>Par ligue (top 5) :</b>\n"
+        for l in by_league[:5]:
+            roi_l = l.get("roi", 0)
+            s = "+" if roi_l >= 0 else ""
+            msg += f"  {l['league']} · {l.get('wins',0)}W/{l.get('losses',0)}L · ROI {s}{roi_l}%\n"
+
+    send_message(msg)
 
 
 def handle_pourcent():
@@ -530,6 +571,38 @@ def handle_web():
         send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
 
 
+def handle_today():
+    from datetime import datetime
+    today = datetime.now(timezone.utc).date().isoformat()
+    bets  = get_unique_bets(limit=200)
+    today_bets = [b for b in bets if b.get("match_date") == today]
+    pending    = [b for b in today_bets if b["success"] == -1]
+    if not pending:
+        send_message(f"📅 <b>Aucun paris pour aujourd'hui ({today})</b>\n💡 L'analyse tourne à {SCHEDULER_HOUR:02d}h00 UTC.")
+        return
+    home_b = [b for b in pending if b["market"] == "Home Win"]
+    away_b = [b for b in pending if b["market"] == "Away Win"]
+    over_b = [b for b in pending if b["market"] not in ("Home Win","Away Win")]
+    bn_b   = [b for b in pending if b.get("bete_noire")]
+    def fmt(b):
+        bn = " 🔥" if b.get("bete_noire") else ""
+        return f"  <b>{b['home_team']} vs {b['away_team']}</b>{bn} · {b['market']} @ <b>{b['bk_odds']}</b> · +{b['value']*100:.1f}%\n"
+    msg = f"📅 <b>Paris du {today} — {len(pending)} sélections</b>\n"
+    if home_b:
+        msg += f"\n🏠 <b>Domicile ({len(home_b)})</b>\n"
+        for b in home_b: msg += fmt(b)
+    if away_b:
+        msg += f"\n✈️ <b>Extérieur ({len(away_b)})</b>\n"
+        for b in away_b: msg += fmt(b)
+    if over_b:
+        msg += f"\n⚽ <b>Over/Under ({len(over_b)})</b>\n"
+        for b in over_b: msg += fmt(b)
+    if bn_b:
+        msg += f"\n🔥 <b>Bête Noire ({len(bn_b)})</b>\n"
+        for b in bn_b: msg += fmt(b)
+    send_message(msg)
+
+
 COMMANDS = {
     "/help":     handle_help,
     "/status":   handle_status,
@@ -540,6 +613,7 @@ COMMANDS = {
     "/refresh":  handle_refresh,
     "/results":  handle_results,
     "/reset":    handle_reset,
+    "/today":   handle_today,
     "/web":      handle_web,
 }
 
@@ -637,13 +711,8 @@ def run_scheduler():
     log.info(f"⏰ Scheduler : refresh 06h, analyse {SCHEDULER_HOUR:02d}h, résultats 23h UTC")
 
     send_message(
-        f"✅ <b>Worker ValueBet démarré !</b>\n\n"
-        f"⏰ Refresh stats : 06h00 UTC\n"
-        f"⚽ Analyse value bets : {SCHEDULER_HOUR:02d}h00 UTC\n"
-        f"📊 Vérification résultats : 23h00 UTC\n"
-        f"🆕 Nouveautés : forme récente + momentum + fatigue + bête noire H2H\n"
-        f"📅 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-        f"💬 Tapez /help pour voir les commandes."
+        f"✅ <b>ValueBet Bot démarré</b> — {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
+        f"💬 /help pour les commandes"
     )
 
     try:

@@ -1,63 +1,164 @@
 {% extends "base.html" %}
-{% block title %}ValueBet Bot — Accueil{% endblock %}
+{% block title %}Dashboard — ValueBet Bot{% endblock %}
 {% block content %}
 <div class="container">
-    <div class="hero">
-        <h1>🎯 ValueBet Bot</h1>
-        <p>Détection automatique de paris à valeur en Ligue 1 et Premier League<br>via modèle de Poisson et Expected Goals.</p>
-        <div class="btn-row">
-            <a href="/live" class="btn btn-primary">⚡ Paris du jour</a>
-            <a href="/history" class="btn btn-secondary">📋 Historique</a>
-            <a href="/stats" class="btn btn-secondary">📊 Statistiques</a>
+    <div class="page-header">
+        <h1>🏠 Dashboard</h1>
+        <p>Vue d'ensemble — performances et paris en cours</p>
+    </div>
+
+    {% set o = stats.overall %}
+
+    <!-- KPIs -->
+    <div class="stat-grid">
+        <div class="stat-card">
+            <div class="val">{{ o.total or 0 }}</div>
+            <div class="lbl">Paris totaux</div>
+        </div>
+        <div class="stat-card">
+            <div class="val" style="color:var(--success)">{{ o.wins or 0 }}</div>
+            <div class="lbl">Gagnés</div>
+        </div>
+        <div class="stat-card">
+            <div class="val" style="color:var(--fail)">{{ o.losses or 0 }}</div>
+            <div class="lbl">Perdus</div>
+        </div>
+        <div class="stat-card">
+            <div class="val" style="color:var(--yellow)">{{ o.pending or 0 }}</div>
+            <div class="lbl">En attente</div>
+        </div>
+        <div class="stat-card">
+            <div class="val {% if (o.win_rate or 0) >= 55 %}c-high{% elif (o.win_rate or 0) >= 45 %}c-mid{% else %}c-neg{% endif %}">
+                {{ o.win_rate or 0 }}%
+            </div>
+            <div class="lbl">Win Rate</div>
+        </div>
+        <div class="stat-card">
+            <div class="val {% if (o.roi or 0) > 0 %}c-high{% elif (o.roi or 0) == 0 %}c-mid{% else %}c-neg{% endif %}">
+                {% if (o.roi or 0) > 0 %}+{% endif %}{{ o.roi or 0 }}%
+            </div>
+            <div class="lbl">ROI</div>
+        </div>
+        <div class="stat-card">
+            <div class="val">+{{ o.avg_value_pct or 0 }}%</div>
+            <div class="lbl">Value moyenne</div>
+        </div>
+        {% if streak and streak.count > 1 %}
+        <div class="stat-card" style="border-color:{% if streak.type == 'win' %}var(--success){% else %}var(--fail){% endif %}30">
+            <div class="val" style="color:{% if streak.type == 'win' %}var(--success){% else %}var(--fail){% endif %}">
+                {% if streak.type == 'win' %}🔥{% else %}❄️{% endif %} {{ streak.count }}
+            </div>
+            <div class="lbl">Série {% if streak.type == 'win' %}victoires{% else %}défaites{% endif %}</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="grid-2">
+        <!-- ROI graph -->
+        <div class="card">
+            <div class="card-title">📈 Évolution du ROI</div>
+            {% if roi_time %}
+            <canvas id="roiChart" height="160"></canvas>
+            {% else %}
+            <p class="empty" style="padding:2rem">Pas encore de données résolues</p>
+            {% endif %}
+        </div>
+
+        <!-- Win rate visuel -->
+        <div class="card">
+            <div class="card-title">🎯 Taux de réussite</div>
+            {% set wr = o.win_rate or 0 %}
+            <div style="text-align:center;padding:1rem 0">
+                <div style="font-size:3.5rem;font-weight:800;line-height:1;color:{% if wr >= 55 %}var(--success){% elif wr >= 45 %}var(--yellow){% else %}var(--fail){% endif %}">
+                    {{ wr }}%
+                </div>
+                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.5rem">
+                    {{ o.wins or 0 }} gagnés / {{ (o.wins or 0) + (o.losses or 0) }} résolus
+                </p>
+            </div>
+            <div class="progress mt1">
+                <div class="progress-bar" style="width:{{ [wr,100]|min }}%;background:{% if wr >= 55 %}var(--success){% elif wr >= 45 %}var(--yellow){% else %}var(--fail){% endif %}"></div>
+            </div>
+            <div style="margin-top:1.5rem;border-top:1px solid var(--border);padding-top:1rem">
+                <p style="font-size:.82rem;color:var(--text-dim)">
+                    Seuil de rentabilité sur cote 1.60 moy. : <strong style="color:var(--text)">62.5%</strong><br>
+                    ROI simulé à 10€/pari :
+                    <strong style="color:{% if (o.roi or 0) > 0 %}var(--success){% else %}var(--fail){% endif %}">
+                        {% if (o.roi or 0) > 0 %}+{% endif %}{{ "%.0f"|format((o.roi or 0) / 100 * 10 * ((o.wins or 0) + (o.losses or 0))) }}€
+                    </strong>
+                    sur {{ (o.wins or 0) + (o.losses or 0) }} paris
+                </p>
+            </div>
         </div>
     </div>
 
-    <div id="quick-stats" class="stat-grid"></div>
-
-    <div class="card">
-        <h2>Comment ça fonctionne</h2>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1.5rem;margin-top:1rem">
+    <!-- Comment ça marche -->
+    <div class="card mt3">
+        <div class="card-title">⚙️ Comment ça fonctionne</div>
+        <div class="grid-3" style="margin-top:.5rem">
             <div>
-                <div style="font-size:1.5rem;margin-bottom:.5rem">📥</div>
-                <strong>1. Collecte de données</strong>
-                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">API-Sports pour les stats équipes, The Odds API pour les cotes Winamax/Betclic</p>
+                <div style="font-size:1.4rem;margin-bottom:.4rem">🧮</div>
+                <strong>Modèle Poisson (40%)</strong>
+                <p style="color:var(--text-dim);font-size:.82rem;margin-top:.3rem">Lambda calculé depuis les stats saison + forme récente pondérée des 10 derniers matchs</p>
             </div>
             <div>
-                <div style="font-size:1.5rem;margin-bottom:.5rem">🧮</div>
-                <strong>2. Modèle Poisson</strong>
-                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">Calcul des xG via forces attaque/défense, distribution de Poisson pour les probas</p>
+                <div style="font-size:1.4rem;margin-bottom:.4rem">📊</div>
+                <strong>Marché bookmaker (60%)</strong>
+                <p style="color:var(--text-dim);font-size:.82rem;margin-top:.3rem">Probabilité implicite des cotes Betclic/Winamax, marge retirée via normalisation</p>
             </div>
             <div>
-                <div style="font-size:1.5rem;margin-bottom:.5rem">💎</div>
-                <strong>3. Détection de value</strong>
-                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">Value = (Cote BK × Proba modèle) - 1 > seuil configuré (défaut 5%)</p>
+                <div style="font-size:1.4rem;margin-bottom:.4rem">⚡</div>
+                <strong>Momentum + Fatigue</strong>
+                <p style="color:var(--text-dim);font-size:.82rem;margin-top:.3rem">Série de victoires → +10% attaque. Repos &lt; 3 jours → -8%. Défaites consécutives → malus</p>
             </div>
             <div>
-                <div style="font-size:1.5rem;margin-bottom:.5rem">📲</div>
-                <strong>4. Notification Telegram</strong>
-                <p style="color:var(--text-dim);font-size:.85rem;margin-top:.3rem">Top 5 value bets envoyés automatiquement chaque matin à 8h UTC</p>
+                <div style="font-size:1.4rem;margin-bottom:.4rem">🔥</div>
+                <strong>Bête Noire H2H</strong>
+                <p style="color:var(--text-dim);font-size:.82rem;margin-top:.3rem">Domination historique sur 3 saisons → bonus proba +4% à +8% selon le taux de victoires</p>
+            </div>
+            <div>
+                <div style="font-size:1.4rem;margin-bottom:.4rem">🎯</div>
+                <strong>Sélection stricte</strong>
+                <p style="color:var(--text-dim);font-size:.82rem;margin-top:.3rem">Cotes 1.40–2.30 uniquement. Pas de nul. Over 2.5 et 3.5 autorisés. Value &gt; 2%</p>
+            </div>
+            <div>
+                <div style="font-size:1.4rem;margin-bottom:.4rem">📲</div>
+                <strong>Telegram automatique</strong>
+                <p style="color:var(--text-dim);font-size:.82rem;margin-top:.3rem">Analyse à 8h UTC, vérification résultats à 23h UTC. Commandes /bets /stats /results</p>
             </div>
         </div>
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
-fetch('/api/stats').then(r=>r.json()).then(data=>{
-    const o = data.overall;
-    const grid = document.getElementById('quick-stats');
-    const items = [
-        {label:'Paris totaux', value: o.total || 0},
-        {label:'Taux de réussite', value: (o.win_rate||0)+'%'},
-        {label:'ROI', value: (o.roi||0)+'%'},
-        {label:'Value moy.', value: '+'+(o.avg_value_pct||0)+'%'},
-        {label:'En attente', value: o.pending||0},
-    ];
-    grid.innerHTML = items.map(i=>
-        `<div class="stat-card">
-            <div class="value">${i.value}</div>
-            <div class="label">${i.label}</div>
-        </div>`
-    ).join('');
+{% if roi_time %}
+const roiData = {{ roi_time | tojson }};
+const ctx = document.getElementById('roiChart').getContext('2d');
+new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: roiData.map(d => d.date),
+        datasets: [{
+            label: 'ROI %',
+            data: roiData.map(d => d.roi),
+            borderColor: roiData[roiData.length-1]?.roi >= 0 ? '#06d6a0' : '#ef476f',
+            backgroundColor: roiData[roiData.length-1]?.roi >= 0 ? '#06d6a010' : '#ef476f10',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 3,
+            pointBackgroundColor: roiData[roiData.length-1]?.roi >= 0 ? '#06d6a0' : '#ef476f',
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { ticks: { color: '#7b7fa8', maxTicksLimit: 8 }, grid: { color: '#25295020' } },
+            y: { ticks: { color: '#7b7fa8', callback: v => v+'%' }, grid: { color: '#25295040' } }
+        }
+    }
 });
+{% endif %}
 </script>
 {% endblock %}

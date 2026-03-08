@@ -1,11 +1,16 @@
 """
-app.py - Flask web interface for ValueBet Bot
+app.py - Flask web interface ValueBet Bot
 """
 import os
 from flask import Flask, render_template, jsonify
 from dotenv import load_dotenv
 load_dotenv()
-from database import init_db, get_unique_bets, get_stats
+
+from database import (
+    init_db, get_unique_bets, get_stats,
+    get_stats_by_market, get_stats_by_league_detailed,
+    get_bete_noire_bets, get_roi_over_time, get_streak,
+)
 
 app = Flask(__name__)
 
@@ -13,79 +18,128 @@ app = Flask(__name__)
 def setup():
     init_db()
 
+# ─────────────────────────────────────────────
+# PAGES
+# ─────────────────────────────────────────────
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    stats    = get_stats()
+    streak   = get_streak()
+    roi_time = get_roi_over_time()
+    return render_template("index.html", stats=stats, streak=streak, roi_time=roi_time)
 
 @app.route("/history")
 def history():
-    bets = get_unique_bets(limit=200)
-    return render_template("history.html", bets=bets)
+    bets = get_unique_bets(limit=500)
+    # Collecte toutes les ligues disponibles pour le filtre
+    leagues = sorted(set(b["league"] for b in bets if b.get("league")))
+    return render_template("history.html", bets=bets, leagues=leagues)
 
 @app.route("/stats")
 def stats_page():
-    stats = get_stats()
-    return render_template("stats.html", stats=stats)
+    stats      = get_stats()
+    by_market  = get_stats_by_market()
+    by_league  = get_stats_by_league_detailed()
+    roi_time   = get_roi_over_time()
+    streak     = get_streak()
+    # Best market
+    resolved = [m for m in by_market if (m.get("total",0) - m.get("pending",0)) >= 3]
+    best_market = max(resolved, key=lambda x: x.get("roi", -999)) if resolved else None
+    return render_template(
+        "stats.html",
+        stats=stats,
+        by_market=by_market,
+        by_league=by_league,
+        roi_time=roi_time,
+        streak=streak,
+        best_market=best_market,
+    )
+
+@app.route("/bete-noire")
+def bete_noire_page():
+    bets      = get_bete_noire_bets(limit=200)
+    # Stats spécifiques bête noire
+    total     = len(bets)
+    wins      = sum(1 for b in bets if b.get("success") == 1)
+    losses    = sum(1 for b in bets if b.get("success") == 0)
+    pending   = sum(1 for b in bets if b.get("success") == -1)
+    settled   = max(wins + losses, 1)
+    win_rate  = round(wins / settled * 100, 1)
+    roi       = round((wins - losses) / settled * 100, 1)
+    bn_stats  = {"total": total, "wins": wins, "losses": losses,
+                 "pending": pending, "win_rate": win_rate, "roi": roi}
+    return render_template("bete_noire.html", bets=bets, bn_stats=bn_stats)
+
+@app.route("/live")
+def live():
+    from datetime import datetime
+    today     = datetime.utcnow().date().isoformat()
+    bets      = get_unique_bets(limit=500)
+    today_bets = [b for b in bets if b.get("match_date") == today]
+    return render_template("live.html", bets=today_bets, today=today)
+
+@app.route("/config")
+def config_page():
+    config = {
+        "value_threshold":      float(os.getenv("VALUE_THRESHOLD", 0.02)),
+        "min_probability":      float(os.getenv("MIN_PROBABILITY", 0.55)),
+        "poisson_weight":       0.40,
+        "days_ahead":           int(os.getenv("SCHEDULER_DAYS_AHEAD", 10)),
+        "season":               int(os.getenv("SEASON", 2025)),
+        "scheduler_hour":       int(os.getenv("SCHEDULER_HOUR", 8)),
+        "h2h_seasons":          3,
+        "has_odds_key":         bool(os.getenv("ODDS_API_KEY")),
+        "has_footballdata_key": bool(os.getenv("FOOTBALLDATA_KEY")),
+        "has_telegram_token":   bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+        "leagues": [
+            {"id": 39,  "name": "Premier League",      "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "h2h": True,  "form": True},
+            {"id": 61,  "name": "Ligue 1",              "flag": "🇫🇷", "h2h": True,  "form": True},
+            {"id": 78,  "name": "Bundesliga",           "flag": "🇩🇪", "h2h": True,  "form": True},
+            {"id": 135, "name": "Serie A",              "flag": "🇮🇹", "h2h": True,  "form": True},
+            {"id": 140, "name": "La Liga",              "flag": "🇪🇸", "h2h": True,  "form": True},
+            {"id": 88,  "name": "Eredivisie",           "flag": "🇳🇱", "h2h": True,  "form": True},
+            {"id": 94,  "name": "Primeira Liga",        "flag": "🇵🇹", "h2h": True,  "form": True},
+            {"id": 40,  "name": "Championship",         "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "h2h": True,  "form": True},
+            {"id": 2,   "name": "Champions League",     "flag": "🏆",  "h2h": True,  "form": True},
+            {"id": 3,   "name": "Europa League",        "flag": "🇪🇺", "h2h": False, "form": False},
+            {"id": 144, "name": "Belgium First Div",    "flag": "🇧🇪", "h2h": False, "form": False},
+            {"id": 203, "name": "Turkey Super League",  "flag": "🇹🇷", "h2h": False, "form": False},
+            {"id": 179, "name": "Scottish Premiership", "flag": "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "h2h": False, "form": False},
+        ],
+    }
+    return render_template("config.html", config=config)
+
+# ─────────────────────────────────────────────
+# API JSON
+# ─────────────────────────────────────────────
 
 @app.route("/api/bets")
 def api_bets():
-    bets = get_unique_bets(limit=200)
-    return jsonify(bets)
+    return jsonify(get_unique_bets(limit=500))
 
 @app.route("/api/stats")
 def api_stats():
-    stats = get_stats()
-    return jsonify(stats)
+    return jsonify(get_stats())
+
+@app.route("/api/stats/market")
+def api_stats_market():
+    return jsonify(get_stats_by_market())
+
+@app.route("/api/stats/league")
+def api_stats_league():
+    return jsonify(get_stats_by_league_detailed())
+
+@app.route("/api/roi-time")
+def api_roi_time():
+    return jsonify(get_roi_over_time())
 
 @app.route("/api/live")
 def api_live():
     from datetime import datetime
     today = datetime.utcnow().date().isoformat()
-    bets = get_unique_bets(limit=200)
-    today_bets = [b for b in bets if b["match_date"] == today]
-    return jsonify(today_bets)
-
-@app.route("/live")
-def live():
-    from datetime import datetime
-    today = datetime.utcnow().date().isoformat()
-    bets = get_unique_bets(limit=200)
-    today_bets = [b for b in bets if b["match_date"] == today]
-    return render_template("live.html", bets=today_bets, today=today)
-
-
-@app.route("/config")
-def config_page():
-    import os
-    config = {
-        "value_threshold":    float(os.getenv("VALUE_THRESHOLD", 0.02)),
-        "min_probability":    float(os.getenv("MIN_PROBABILITY", 0.55)),
-        "poisson_weight":     0.50,
-        "days_ahead":         int(os.getenv("SCHEDULER_DAYS_AHEAD", 10)),
-        "top_bets_count":     int(os.getenv("TOP_BETS_COUNT", 10)),
-        "season":             int(os.getenv("SEASON", 2025)),
-        "scheduler_hour":     int(os.getenv("SCHEDULER_HOUR", 8)),
-        "has_odds_key":       bool(os.getenv("ODDS_API_KEY")),
-        "has_footballdata_key": bool(os.getenv("FOOTBALLDATA_KEY")),
-        "has_telegram_token": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
-        "leagues": [
-            {"id": 39,  "name": "Premier League",      "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
-            {"id": 61,  "name": "Ligue 1",              "flag": "🇫🇷"},
-            {"id": 78,  "name": "Bundesliga",           "flag": "🇩🇪"},
-            {"id": 135, "name": "Serie A",              "flag": "🇮🇹"},
-            {"id": 140, "name": "La Liga",              "flag": "🇪🇸"},
-            {"id": 88,  "name": "Eredivisie",           "flag": "🇳🇱"},
-            {"id": 94,  "name": "Primeira Liga",        "flag": "🇵🇹"},
-            {"id": 40,  "name": "Championship",         "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
-            {"id": 2,   "name": "Champions League",     "flag": "🇪🇺"},
-            {"id": 3,   "name": "Europa League",        "flag": "🇪🇺"},
-            {"id": 144, "name": "Belgium First Div",    "flag": "🇧🇪"},
-            {"id": 203, "name": "Turkey Super League",  "flag": "🇹🇷"},
-            {"id": 179, "name": "Scottish Premiership", "flag": "🏴󠁧󠁢󠁳󠁣󠁴󠁿"},
-            {"id": 3,   "name": "Europa League",        "flag": "🇪🇺"},
-        ],
-    }
-    return render_template("config.html", config=config)
+    bets  = get_unique_bets(limit=500)
+    return jsonify([b for b in bets if b.get("match_date") == today])
 
 if __name__ == "__main__":
     init_db()
