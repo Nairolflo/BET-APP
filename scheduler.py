@@ -432,16 +432,18 @@ def handle_status():
 
 
 def handle_bets():
-    bets = get_unique_bets(limit=100)
-    if not bets:
-        send_message("📭 <b>Aucun value bet en base.</b>\n💡 Tapez /run pour lancer une analyse.")
+    bets    = get_unique_bets(limit=200)
+    pending = [b for b in bets if b["success"] == -1]
+
+    if not pending:
+        send_message("📭 <b>Aucun paris en attente.</b>\n💡 Tapez /run pour lancer une analyse.")
         return
-    msg = f"⚽ <b>Tous les value bets</b> — {len(bets)} sélection(s)\n{'─'*32}\n\n"
-    for b in bets[:20]:
-        status = "✅" if b["success"] == 1 else "❌" if b["success"] == 0 else "⏳"
-        bn     = " 🔥" if b.get("bete_noire") else ""
+
+    msg = f"⏳ <b>Paris en attente</b> — {len(pending)} sélection(s)\n{'─'*32}\n\n"
+    for b in pending[:20]:
+        bn = " 🔥" if b.get("bete_noire") else ""
         msg += (
-            f"{status} <b>{b['home_team']} vs {b['away_team']}</b>{bn}\n"
+            f"⏳ <b>{b['home_team']} vs {b['away_team']}</b>{bn}\n"
             f"   📅 {b['match_date']} — {b.get('league', '')}\n"
             f"   📌 {b['market']} @ <b>{b['bk_odds']}</b>\n"
             f"   💎 Value : <b>+{b['value']*100:.1f}%</b> | Proba : {b['probability']*100:.0f}%\n"
