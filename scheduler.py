@@ -1,13 +1,15 @@
 """
-scheduler.py - Value bet engine + Bot Telegram interactif
+scheduler.py — Le Loup de Wall Bet ⚽
+Value bet engine + Bot Telegram
 
-Jobs automatiques :
-  06h00 UTC → refresh stats equipes
-  08h00 UTC → analyse value bets
-  23h00 UTC → verification resultats
+Jobs automatiques (UTC) :
+  06h00 → refresh stats équipes
+  08h00 → analyse value bets
+  23h00 → vérification résultats
 
 Commandes Telegram :
-  /help /status /bets /stats /pourcent /run /refresh /results /reset /web
+  /help /status /bets /stats /pourcent /run /refresh
+  /results /reset /today /api /h2h /refreshh2h /web /redeploy
 """
 
 import os
@@ -38,29 +40,9 @@ from model import (
 )
 from telegram_bot import send_message, send_daily_summary
 
-# ── Biathlon (optionnel — désactivé si module absent) ──
-BIATHLON_ENABLED = False
-try:
-    import sys as _sys
-    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "biathlon"))
-    from biathlon.biathlon_client import get_upcoming_races, RACE_FORMATS
-    from biathlon.biathlon_odds   import get_biathlon_events, parse_h2h_odds, find_value_bets
-    from biathlon.biathlon_model  import predict_h2h, detect_h2h_value
-    from biathlon.biathlon_bot    import run_biathlon_analysis, predict_h2h_by_name
-    from biathlon.scheduler import (
-        init_biathlon_db, save_biathlon_bet, get_pending_biathlon_bets,
-        update_biathlon_bet_result, run_biathlon_full_analysis, check_biathlon_results,
-        handle_biathlon_status, handle_biathlon_stats,
-        ANALYSIS_HOUR as BIATHLON_ANALYSIS_HOUR,
-        RESULTS_HOUR  as BIATHLON_RESULTS_HOUR,
-    )
-    BIATHLON_ENABLED = True
-    log.info("🎿 Module biathlon chargé ✅")
-except Exception as _e:
-    log.warning(f"🎿 Module biathlon non disponible : {_e}")
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
+
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -74,13 +56,11 @@ LEAGUE_NAMES = {
     140: "La Liga",
     88:  "Eredivisie",
     94:  "Primeira Liga",
-    71:  "Brasileirao",
     40:  "Championship",
     2:   "Champions League",
     144: "Belgium First Div",
     203: "Turkey Super League",
     179: "Scottish Premiership",
-    262: "Liga MX",
     3:   "Europa League",
 }
 
@@ -115,27 +95,21 @@ def refresh_team_stats(silent=False):
             teams = get_team_standings(league_id, SEASON)
             for t in teams:
                 save_team_stats(t)
-            msg = f"✅ {LEAGUE_NAMES.get(league_id, league_id)} : {len(teams)} equipes"
+            msg = f"OK {LEAGUE_NAMES.get(league_id, league_id)} : {len(teams)} equipes"
             log.info(f"  {msg}")
             results.append(msg)
         except Exception as e:
-            msg = f"❌ {LEAGUE_NAMES.get(league_id, league_id)} : {e}"
+            msg = f"ERR {LEAGUE_NAMES.get(league_id, league_id)} : {e}"
             log.error(f"  {msg}")
             results.append(msg)
 
     worker_state["last_refresh"] = datetime.now(timezone.utc)
     if not silent:
-        send_message("🔄 <b>Refresh stats terminé</b>\n\n" + "\n".join(results))
+        send_message("Refresh stats termine\n\n" + "\n".join(results))
     return results
 
 
 def smart_run_value_bet_engine():
-    """
-    Mode intelligent : vérifie d'abord si des matchs existent dans les 3 prochains jours.
-    Si aucune ligue n'a de matchs proches → run annulé, quota préservé.
-    Si au moins une ligue a des matchs → run normal.
-    Le run manuel /run ignore ce check et tourne toujours.
-    """
     from datetime import timedelta
     today      = datetime.now(timezone.utc).date()
     near_dates = {(today + timedelta(days=i)).isoformat() for i in range(3)}
@@ -143,41 +117,40 @@ def smart_run_value_bet_engine():
     leagues_with_fixtures = []
     for league_id in LEAGUES:
         try:
-            fixtures = get_fixtures(league_id, SEASON, 3)  # seulement 3 jours
+            fixtures = get_fixtures(league_id, SEASON, 3)
             near = [f for f in fixtures if f.get("date", "")[:10] in near_dates]
             if near:
                 leagues_with_fixtures.append(LEAGUE_NAMES.get(league_id, str(league_id)))
         except Exception:
-            pass  # si erreur on inclut quand même
+            pass
 
     if not leagues_with_fixtures:
-        log.info("⏭️  Smart run : aucun match dans 3 jours — analyse annulée (quota préservé)")
+        log.info("Smart run : aucun match dans 3 jours")
         send_message(
-            f"⏭️ <b>Analyse auto annulée</b>\n"
-            f"Aucun match dans les 3 prochains jours.\n"
-            f"<i>Quota Odds API préservé. /run pour forcer.</i>"
+            "<b>Analyse auto annulee</b>\n"
+            "Aucun match dans les 3 prochains jours.\n"
+            "Quota preserve. /run pour forcer."
         )
         return
 
-    log.info(f"✅ Smart run : {len(leagues_with_fixtures)} ligue(s) avec matchs → analyse lancée")
+    log.info(f"Smart run : {len(leagues_with_fixtures)} ligue(s) avec matchs")
     run_value_bet_engine(silent=False)
 
 
 def run_value_bet_engine(silent=False):
     if worker_state["running"]:
-        send_message("⏳ Une analyse est déjà en cours, patientez...")
+        send_message("Une analyse est deja en cours, patientez...")
         return
 
     worker_state["running"] = True
 
-    # Vérif quota avant de démarrer (sauf run forcé via /run)
-    if not silent:  # silent=True = run normal schedulé
+    if not silent:
         if not odds_quota_ok(required=len(LEAGUES)):
             rem = get_odds_quota().get("remaining", "?")
             send_message(
-                f"⚠️ <b>Run annulé — quota insuffisant</b>\n\n"
-                f"📡 Restantes : <b>{rem}</b> / seuil sécurité : {30}\n"
-                f"<i>Utilisez /run pour forcer malgré tout.</i>"
+                f"<b>Run annule quota insuffisant</b>\n"
+                f"Restantes : <b>{rem}</b> / seuil : 30\n"
+                f"/run pour forcer quand meme."
             )
             worker_state["running"] = False
             return
@@ -188,11 +161,11 @@ def run_value_bet_engine(silent=False):
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     log.info("=" * 60)
-    log.info(f"⚽ VALUE BET ENGINE — {now}")
+    log.info(f"VALUE BET ENGINE -- {now}")
     log.info("=" * 60)
 
     if not silent:
-        send_message(f"🚀 <b>Analyse démarrée</b>\n📅 {now}\n🔍 Calcul en cours...")
+        send_message(f"<b>Analyse demarree</b>\n{now}\nCalcul en cours...")
 
     new_value_bets = []
     errors = []
@@ -201,10 +174,9 @@ def run_value_bet_engine(silent=False):
         league_name = LEAGUE_NAMES.get(league_id, str(league_id))
         log.info(f"\n[{league_name}]")
 
-        # 1. Fixtures
         try:
             fixtures = get_fixtures(league_id, SEASON, DAYS_AHEAD)
-            log.info(f"  {len(fixtures)} matchs trouvés.")
+            log.info(f"  {len(fixtures)} matchs trouves.")
         except Exception as e:
             errors.append(f"Fixtures {league_name}: {e}")
             continue
@@ -212,10 +184,9 @@ def run_value_bet_engine(silent=False):
         if not fixtures:
             continue
 
-        # 2. Stats equipes
         team_stats = get_team_stats(league_id, SEASON)
         if not team_stats:
-            log.warning(f"  Pas de stats — auto-refresh...")
+            log.warning(f"  Pas de stats -- auto-refresh...")
             try:
                 teams = get_team_standings(league_id, SEASON)
                 for t in teams:
@@ -230,26 +201,25 @@ def run_value_bet_engine(silent=False):
         strengths = calc_attack_defense_strength(team_stats, avg_home, avg_away)
         log.info(f"  Moy. buts: dom={avg_home:.2f} ext={avg_away:.2f}")
 
-        # 3. Forme récente (seulement pour ligues avec FD)
         recent_form = {}
         if FOOTBALLDATA_LEAGUE_MAP.get(league_id):
             try:
                 recent_form = get_recent_form(league_id, SEASON)
                 if recent_form:
-                    log.info(f"  Forme récente: {len(recent_form)} equipes")
+                    log.info(f"  Forme recente: {len(recent_form)} equipes")
             except Exception as e:
-                log.warning(f"  Forme récente indisponible: {e}")
+                log.warning(f"  Forme recente indisponible: {e}")
 
-        # 4. Cotes bookmakers — mode intelligent : skip si aucun match dans 3 jours
         from datetime import timedelta
         today      = datetime.now(timezone.utc).date()
         near_dates = {(today + timedelta(days=i)).isoformat() for i in range(3)}
         near_fixtures = [f for f in fixtures if f.get("date", "")[:10] in near_dates]
+
         if not near_fixtures:
-            log.info(f"  ⏭️  Aucun match dans 3 jours — appel Odds API ignoré (économie crédit)")
+            log.info(f"  Aucun match dans 3 jours -- Odds API ignore")
             odds_events = []
         else:
-            log.info(f"  {len(near_fixtures)} match(s) dans 3 jours → appel Odds API")
+            log.info(f"  {len(near_fixtures)} match(s) dans 3 jours -> Odds API")
             try:
                 odds_events = get_odds(league_id)
                 log.info(f"  {len(odds_events)} evenements avec cotes.")
@@ -262,12 +232,10 @@ def run_value_bet_engine(silent=False):
             key = (ev["home_team"].lower(), ev["away_team"].lower())
             odds_lookup[key] = ev["odds"]
 
-        # 5. Prédiction + value pour chaque match
         for fix in fixtures:
             home_name = fix["home_team_name"]
             away_name = fix["away_team_name"]
 
-            # Seuils Over/Under disponibles
             ou_thresholds = set()
             for bk_odds in odds_lookup.values():
                 for k in bk_odds.keys():
@@ -278,7 +246,6 @@ def run_value_bet_engine(silent=False):
                             pass
             ou_thresholds = sorted(ou_thresholds) or [1.5, 2.5, 3.5, 4.5]
 
-            # Forme récente des deux equipes
             h_norm    = normalize_team_name(home_name)
             a_norm    = normalize_team_name(away_name)
             home_form = recent_form.get(h_norm) or recent_form.get(home_name.lower())
@@ -291,7 +258,6 @@ def run_value_bet_engine(silent=False):
             if not prediction:
                 continue
 
-            # Cherche les cotes — exact puis fuzzy
             odds = odds_lookup.get((home_name.lower(), away_name.lower()), {})
             if not odds:
                 for (h_key, a_key), o in odds_lookup.items():
@@ -303,14 +269,13 @@ def run_value_bet_engine(silent=False):
             if not odds:
                 continue
 
-            # H2H bête noire — batch, pas d'appel API supplémentaire par match
             h2h = None
             if FOOTBALLDATA_LEAGUE_MAP.get(league_id):
                 try:
                     h2h = get_h2h(league_id, home_name, away_name, match_date=fix["date"])
                     if h2h:
                         log.info(
-                            f"  🔥 H2H {home_name} vs {away_name}: "
+                            f"  H2H {home_name} vs {away_name}: "
                             f"{h2h['home_wins']}W-{h2h['draws']}D-{h2h['away_wins']}L "
                             f"(home={h2h['win_rate_home']:.0%})"
                         )
@@ -336,14 +301,14 @@ def run_value_bet_engine(silent=False):
                     })
                     if not is_bet_notified(bet_id):
                         log.info(
-                            f"  ✅ NOUVEAU BET #{bet_id}: {home_name} vs {away_name} | "
+                            f"  NOUVEAU BET #{bet_id}: {home_name} vs {away_name} | "
                             f"{bet['market']} @ {bet['bk_odds']} | +{bet['value']*100:.1f}%"
-                            + (" 🔥 BETE NOIRE" if bet.get("bete_noire") else "")
+                            + (" BETE NOIRE" if bet.get("bete_noire") else "")
                         )
                         new_value_bets.append((bet, match_info))
                         mark_bet_notified(bet_id)
                     else:
-                        log.info(f"  ⏭ BET #{bet_id} deja notifie: {home_name} vs {away_name}")
+                        log.info(f"  BET #{bet_id} deja notifie: {home_name} vs {away_name}")
                 except Exception as e:
                     log.error(f"  save_bet: {e}")
 
@@ -351,22 +316,20 @@ def run_value_bet_engine(silent=False):
     worker_state["bets_today"] = len(new_value_bets)
     worker_state["running"]    = False
 
-    # Quota restant après le run
     try:
         from api_clients import get_odds_api_usage
-        usage     = get_odds_api_usage()
-        remaining = usage.get("remaining", "?")
-        used_run  = usage.get("used", "?")
-        quota_line = f"\n📡 Quota Odds API : <b>{remaining}</b> req. restantes"
+        usage      = get_odds_api_usage()
+        remaining  = usage.get("remaining", "?")
+        quota_line = f"\nQuota Odds API : <b>{remaining}</b> req. restantes"
     except Exception:
         quota_line = ""
 
     send_daily_summary(new_value_bets, extra=quota_line)
 
     if errors:
-        send_message("⚠️ <b>Erreurs durant l'analyse :</b>\n" + "\n".join(f"• {e}" for e in errors))
+        send_message("<b>Erreurs durant l'analyse :</b>\n" + "\n".join(f"- {e}" for e in errors))
 
-    log.info(f"✅ Analyse terminée — {len(new_value_bets)} nouveaux value bets.")
+    log.info(f"Analyse terminee -- {len(new_value_bets)} nouveaux value bets.")
 
 
 # ─────────────────────────────────────────────
@@ -377,10 +340,10 @@ def check_results(silent=False):
     pending = get_pending_bets()
     if not pending:
         if not silent:
-            send_message("📭 Aucun bet en attente à vérifier.")
+            send_message("Aucun bet en attente a verifier.")
         return
 
-    log.info(f"🔍 Vérification de {len(pending)} bets en attente...")
+    log.info(f"Verification de {len(pending)} bets en attente...")
     updated_won  = []
     updated_lost = []
 
@@ -391,7 +354,7 @@ def check_results(silent=False):
 
     league_name_to_id = {v: k for k, v in LEAGUE_NAMES.items()}
 
-    def fuzzy_match(n1: str, n2: str) -> bool:
+    def fuzzy_match(n1, n2):
         a = normalize_team_name(n1)
         b = normalize_team_name(n2)
         if a == b or a in b or b in a:
@@ -401,7 +364,7 @@ def check_results(silent=False):
             b = b.replace(f" {w}", "").replace(f"{w} ", "")
         return a.strip() == b.strip() or a.strip() in b.strip() or b.strip() in a.strip()
 
-    def find_result(results: dict, home_bet: str, away_bet: str):
+    def find_result(results, home_bet, away_bet):
         for (h_key, a_key), result in results.items():
             if fuzzy_match(home_bet, h_key) and fuzzy_match(away_bet, a_key):
                 return result
@@ -451,29 +414,27 @@ def check_results(silent=False):
                 score_str = f"{hg}-{ag}"
                 if success == 1:
                     updated_won.append({**bet, "score": score_str})
-                    log.info(f"  ✅ GAGNÉ: {bet['home_team']} vs {bet['away_team']} | {market} ({score_str})")
                 else:
                     updated_lost.append({**bet, "score": score_str})
-                    log.info(f"  ❌ PERDU: {bet['home_team']} vs {bet['away_team']} | {market} ({score_str})")
 
     if not updated_won and not updated_lost:
         if not silent:
-            send_message("⏳ Résultats pas encore disponibles.")
+            send_message("Resultats pas encore disponibles.")
         return
 
-    msg = "📊 <b>Résultats mis à jour</b>\n\n"
+    msg = "<b>Resultats mis a jour</b>\n\n"
     if updated_won:
-        msg += f"✅ <b>Gagnés ({len(updated_won)}) :</b>\n"
+        msg += f"OK Gagnes ({len(updated_won)}) :\n"
         for b in updated_won:
-            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']} ({b['score']})\n"
+            msg += f"  {b['home_team']} vs {b['away_team']} -- {b['market']} @ {b['bk_odds']} ({b['score']})\n"
     if updated_lost:
-        msg += f"\n❌ <b>Perdus ({len(updated_lost)}) :</b>\n"
+        msg += f"\nKO Perdus ({len(updated_lost)}) :\n"
         for b in updated_lost:
-            msg += f"  • {b['home_team']} vs {b['away_team']} — {b['market']} @ {b['bk_odds']} ({b['score']})\n"
+            msg += f"  {b['home_team']} vs {b['away_team']} -- {b['market']} @ {b['bk_odds']} ({b['score']})\n"
 
     if not silent:
         send_message(msg)
-    log.info(f"✅ {len(updated_won)} gagnés, {len(updated_lost)} perdus.")
+    log.info(f"{len(updated_won)} gagnes, {len(updated_lost)} perdus.")
 
 
 # ─────────────────────────────────────────────
@@ -482,22 +443,23 @@ def check_results(silent=False):
 
 def handle_help():
     send_message(
-        "⚽ <b>Le Loup de Wall Bet — FOOT</b>\n\n"
-        "❓ /help       — Ce message\n"
-        "📡 /status     — État du worker\n"
-        "⚽ /bets       — Paris en attente\n"
-        "📊 /stats      — Win rate + ROI\n"
-        "📈 /pourcent   — Taux de réussite rapide\n"
-        "⚡ /run        — Lancer une analyse\n"
-        "🔄 /refresh    — Refresh stats équipes\n"
-        "🏆 /results    — Vérifier les résultats\n"
-        "📅 /today      — Paris du jour\n"
-        "📡 /api        — Quota Odds API\n"
-        "🔥 /h2h        — Cache H2H\n"
-        "🔄 /refreshh2h — Forcer refresh H2H\n"
-        "🗑 /reset      — Effacer tous les paris\n"
-        "🌐 /web        — Lien page web\n\n"
-        f"<i>⏰ Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC · /helpbiathlon pour le biathlon</i>"
+        "<b>Le Loup de Wall Bet</b>\n\n"
+        "/help        -- Ce message\n"
+        "/status      -- Etat du worker\n"
+        "/bets        -- Paris en attente\n"
+        "/stats       -- Win rate + ROI\n"
+        "/pourcent    -- Taux de reussite rapide\n"
+        "/run         -- Lancer une analyse\n"
+        "/refresh     -- Refresh stats equipes\n"
+        "/results     -- Verifier les resultats\n"
+        "/today       -- Paris du jour\n"
+        "/api         -- Quota Odds API\n"
+        "/h2h         -- Cache H2H\n"
+        "/refreshh2h  -- Forcer refresh H2H\n"
+        "/reset       -- Effacer tous les paris\n"
+        "/web         -- Lien page web\n"
+        "/redeploy    -- Redeploy Railway\n\n"
+        f"Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC"
     )
 
 
@@ -510,16 +472,16 @@ def handle_status():
         delta = datetime.now(timezone.utc) - started
         h, rem = divmod(int(delta.total_seconds()), 3600)
         uptime = f"{h}h {rem//60:02d}m"
-    etat = "🔄 Analyse en cours..." if worker_state["running"] else "🟢 En attente"
+    etat = "Analyse en cours..." if worker_state["running"] else "En attente"
     send_message(
-        f"📡 <b>Status du Worker</b>\n\n"
-        f"État : {etat}\n"
-        f"⏱ Uptime : {uptime}\n"
-        f"📅 Démarré : {started.strftime('%Y-%m-%d %H:%M UTC') if started else 'N/A'}\n"
-        f"🕐 Prochaine analyse : {SCHEDULER_HOUR:02d}h00 UTC\n"
-        f"⚽ Dernière analyse : {last_run.strftime('%Y-%m-%d %H:%M UTC') if last_run else 'Aucune'}\n"
-        f"🔄 Dernier refresh : {last_refresh.strftime('%Y-%m-%d %H:%M UTC') if last_refresh else 'Aucun'}\n"
-        f"🎯 Nouveaux bets dernière analyse : {worker_state['bets_today']}"
+        f"<b>Status du Worker</b>\n\n"
+        f"Etat : {etat}\n"
+        f"Uptime : {uptime}\n"
+        f"Demarre : {started.strftime('%Y-%m-%d %H:%M UTC') if started else 'N/A'}\n"
+        f"Prochaine analyse : {SCHEDULER_HOUR:02d}h00 UTC\n"
+        f"Derniere analyse : {last_run.strftime('%Y-%m-%d %H:%M UTC') if last_run else 'Aucune'}\n"
+        f"Dernier refresh : {last_refresh.strftime('%Y-%m-%d %H:%M UTC') if last_refresh else 'Aucun'}\n"
+        f"Bets derniere analyse : {worker_state['bets_today']}"
     )
 
 
@@ -528,7 +490,7 @@ def handle_bets():
     pending = [b for b in bets if b["success"] == -1]
 
     if not pending:
-        send_message("📭 <b>Aucun paris en attente.</b>\n💡 /run pour lancer une analyse.")
+        send_message("<b>Aucun paris en attente.</b>\n/run pour lancer une analyse.")
         return
 
     home_bets = [b for b in pending if b["market"] == "Home Win"]
@@ -537,74 +499,69 @@ def handle_bets():
     bn_bets   = [b for b in pending if b.get("bete_noire")]
 
     def fmt_bet(b):
-        bn = " 🔥" if b.get("bete_noire") else ""
+        bn = " BETE NOIRE" if b.get("bete_noire") else ""
         return (
             f"  <b>{b['home_team']} vs {b['away_team']}</b>{bn}\n"
-            f"  📅 {b['match_date']} · {b.get('league', '')}"
-            f" · @ <b>{b['bk_odds']}</b> · +{b['value']*100:.1f}% · {b['probability']*100:.0f}%\n"
+            f"  {b['match_date']} - {b.get('league', '')}"
+            f" - @ <b>{b['bk_odds']}</b> - +{b['value']*100:.1f}% - {b['probability']*100:.0f}%\n"
         )
 
-    msg = f"⏳ <b>Paris en attente — {len(pending)} sélections</b>\n"
+    msg = f"<b>Paris en attente -- {len(pending)} selections</b>\n"
     if home_bets:
-        msg += f"\n🏠 <b>Domicile ({len(home_bets)})</b>\n"
+        msg += f"\n<b>Domicile ({len(home_bets)})</b>\n"
         for b in home_bets[:8]: msg += fmt_bet(b)
     if away_bets:
-        msg += f"\n✈️ <b>Extérieur ({len(away_bets)})</b>\n"
+        msg += f"\n<b>Exterieur ({len(away_bets)})</b>\n"
         for b in away_bets[:8]: msg += fmt_bet(b)
     if over_bets:
-        msg += f"\n⚽ <b>Over/Under ({len(over_bets)})</b>\n"
+        msg += f"\n<b>Over/Under ({len(over_bets)})</b>\n"
         for b in over_bets[:8]: msg += fmt_bet(b)
     if bn_bets:
-        msg += f"\n🔥 <b>Bête Noire ({len(bn_bets)})</b>\n"
+        msg += f"\n<b>Bete Noire ({len(bn_bets)})</b>\n"
         for b in bn_bets[:5]: msg += fmt_bet(b)
     send_message(msg)
 
 
 def handle_stats():
     from database import get_stats_by_market, get_stats_by_league_detailed, get_streak
-    stats      = get_stats()
-    o          = stats["overall"]
-    by_market  = get_stats_by_market()
-    by_league  = get_stats_by_league_detailed()
-    streak     = get_streak()
-    roi        = o.get("roi") or 0
-    roi_sign   = "+" if roi >= 0 else ""
+    stats     = get_stats()
+    o         = stats["overall"]
+    by_market = get_stats_by_market()
+    by_league = get_stats_by_league_detailed()
+    streak    = get_streak()
+    roi       = o.get("roi") or 0
+    roi_sign  = "+" if roi >= 0 else ""
 
-    # Streak
     streak_line = ""
     if streak and streak.get("count", 0) > 1:
-        emoji = "🔥" if streak["type"] == "win" else "❄️"
-        label = "victoires" if streak["type"] == "win" else "défaites"
-        streak_line = f"\n{emoji} Série : <b>{streak['count']} {label} consécutives</b>"
+        label = "victoires" if streak["type"] == "win" else "defaites"
+        streak_line = f"\nSerie : <b>{streak['count']} {label} consecutives</b>"
 
-    # Meilleur marché
-    resolved = [m for m in by_market if (m.get("total",0) - m.get("pending",0)) >= 3]
-    best = max(resolved, key=lambda x: x.get("roi", -999)) if resolved else None
-    best_line = f"\n🏆 Meilleur marché : <b>{best['market']}</b> (+{best['roi']}% ROI)" if best else ""
+    resolved  = [m for m in by_market if (m.get("total", 0) - m.get("pending", 0)) >= 3]
+    best      = max(resolved, key=lambda x: x.get("roi", -999)) if resolved else None
+    best_line = f"\nMeilleur marche : <b>{best['market']}</b> (+{best['roi']}% ROI)" if best else ""
 
     msg = (
-        f"📊 <b>Statistiques ValueBet</b>\n\n"
-        f"🎯 Total : <b>{o.get('total') or 0}</b> · ✅ {o.get('wins') or 0} · ❌ {o.get('losses') or 0} · ⏳ {o.get('pending') or 0}\n"
-        f"📈 Win rate : <b>{o.get('win_rate') or 0}%</b> · ROI : <b>{roi_sign}{roi}%</b>\n"
-        f"💎 Value moy. : <b>+{o.get('avg_value_pct') or 0}%</b>"
+        f"<b>Statistiques ValueBet</b>\n\n"
+        f"Total : <b>{o.get('total') or 0}</b> - OK {o.get('wins') or 0} - KO {o.get('losses') or 0} - En attente {o.get('pending') or 0}\n"
+        f"Win rate : <b>{o.get('win_rate') or 0}%</b> - ROI : <b>{roi_sign}{roi}%</b>\n"
+        f"Value moy. : <b>+{o.get('avg_value_pct') or 0}%</b>"
         f"{streak_line}{best_line}\n"
     )
 
-    # Par marché
     if by_market:
-        msg += "\n<b>Par marché :</b>\n"
+        msg += "\n<b>Par marche :</b>\n"
         for m in by_market:
             roi_m = m.get("roi", 0)
             s = "+" if roi_m >= 0 else ""
-            msg += f"  {m['market']} · {m.get('wins',0)}W/{m.get('losses',0)}L · WR {m.get('win_rate',0)}% · ROI {s}{roi_m}%\n"
+            msg += f"  {m['market']} - {m.get('wins',0)}W/{m.get('losses',0)}L - WR {m.get('win_rate',0)}% - ROI {s}{roi_m}%\n"
 
-    # Par ligue (top 5)
     if by_league:
         msg += "\n<b>Par ligue (top 5) :</b>\n"
         for l in by_league[:5]:
             roi_l = l.get("roi", 0)
             s = "+" if roi_l >= 0 else ""
-            msg += f"  {l['league']} · {l.get('wins',0)}W/{l.get('losses',0)}L · ROI {s}{roi_l}%\n"
+            msg += f"  {l['league']} - {l.get('wins',0)}W/{l.get('losses',0)}L - ROI {s}{roi_l}%\n"
 
     send_message(msg)
 
@@ -612,154 +569,132 @@ def handle_stats():
 def handle_pourcent():
     stats   = get_stats()
     o       = stats["overall"]
-    total   = o.get("total") or 0
     wins    = o.get("wins") or 0
     losses  = o.get("losses") or 0
     pending = o.get("pending") or 0
+    total   = o.get("total") or 0
     settled = total - pending
     if settled == 0:
-        send_message("📊 Aucun pari résolu.\n💡 Tapez /results pour mettre à jour.")
+        send_message("Aucun pari resolu.\nTapez /results pour mettre a jour.")
         return
     win_rate = round(wins / settled * 100, 1)
     roi      = round((wins - losses) / settled * 100, 1)
     roi_sign = "+" if roi >= 0 else ""
     send_message(
-        f"📈 <b>Taux de réussite</b>\n\n"
-        f"✅ Gagnés : <b>{wins}</b>\n"
-        f"❌ Perdus : <b>{losses}</b>\n"
-        f"⏳ En attente : <b>{pending}</b>\n"
-        f"📊 Total résolu : <b>{settled}</b>\n\n"
-        f"🎯 Taux de réussite : <b>{win_rate}%</b>\n"
-        f"💰 ROI : <b>{roi_sign}{roi}%</b>"
+        f"<b>Taux de reussite</b>\n\n"
+        f"Gagnes : <b>{wins}</b>\n"
+        f"Perdus : <b>{losses}</b>\n"
+        f"En attente : <b>{pending}</b>\n"
+        f"Total resolu : <b>{settled}</b>\n\n"
+        f"Taux : <b>{win_rate}%</b>\n"
+        f"ROI : <b>{roi_sign}{roi}%</b>"
     )
 
 
 def handle_run():
-    send_message("⚡ <b>Analyse manuelle lancée !</b>\n💡 Tapez /bets après pour voir les sélections.")
+    send_message("<b>Analyse manuelle lancee !</b>\nTapez /bets apres pour voir les selections.")
+    clear_odds_cache()
     threading.Thread(target=run_value_bet_engine, daemon=True).start()
 
 
 def handle_refresh():
-    send_message("🔄 <b>Refresh des stats en cours...</b>")
+    send_message("<b>Refresh des stats en cours...</b>")
     threading.Thread(target=refresh_team_stats, daemon=True).start()
 
 
 def handle_results():
-    send_message("🔍 <b>Vérification des résultats en cours...</b>")
+    send_message("<b>Verification des resultats en cours...</b>")
     threading.Thread(target=check_results, daemon=True).start()
 
 
 def handle_reset():
     count = reset_all_bets()
-    send_message(f"🗑 <b>Reset effectué</b> — {count} paris supprimés.\n\nBase de données vierge ✅")
+    send_message(f"<b>Reset effectue</b> -- {count} paris supprimes.\nBase de donnees vierge.")
 
 
 def handle_web():
     url = os.getenv("WEB_URL", "")
     if url:
-        send_message(f"🌐 <b>Interface Web ValueBet</b>\n\n👉 {url}")
+        send_message(f"<b>Interface Web ValueBet</b>\n\n{url}")
     else:
-        send_message("⚠️ Variable WEB_URL non configurée dans Railway.")
+        send_message("Variable WEB_URL non configuree dans Railway.")
 
 
 def handle_api():
-    from api_clients import get_odds_api_usage
-    usage = get_odds_api_usage()
-    if usage.get("error"):
-        send_message(f"❌ <b>Erreur API</b> : {usage['error']}")
-        return
-    used      = usage.get("used", 0)
-    remaining = usage.get("remaining", 0)
-    total     = usage.get("total", used + remaining)
-    pct_used  = round(used / max(total, 1) * 100, 1)
-    bar_filled = int(pct_used / 10)
-    bar = "█" * bar_filled + "░" * (10 - bar_filled)
-    send_message(
-        f"📡 <b>Quota The Odds API</b>\n\n"
-        f"[{bar}] {pct_used}%\n\n"
-        f"✅ Utilisées : <b>{used}</b>\n"
-        f"🟢 Restantes : <b>{remaining}</b>\n"
-        f"📊 Total : <b>{total}</b>/mois\n\n"
-        f"<i>Chaque run utilise ~{len([39,61,78,135,140,88,94,40,2,144,203,179,3]) * 2} requêtes</i>"
-    )
-
-
-def handle_today():
-    from datetime import datetime
-    today = datetime.now(timezone.utc).date().isoformat()
-    bets  = get_unique_bets(limit=200)
-    today_bets = [b for b in bets if b.get("match_date") == today]
-    pending    = [b for b in today_bets if b["success"] == -1]
-    if not pending:
-        send_message(f"📅 <b>Aucun paris pour aujourd'hui ({today})</b>\n💡 L'analyse tourne à {SCHEDULER_HOUR:02d}h00 UTC.")
-        return
-    home_b = [b for b in pending if b["market"] == "Home Win"]
-    away_b = [b for b in pending if b["market"] == "Away Win"]
-    over_b = [b for b in pending if b["market"] not in ("Home Win","Away Win")]
-    bn_b   = [b for b in pending if b.get("bete_noire")]
-    def fmt(b):
-        bn = " 🔥" if b.get("bete_noire") else ""
-        return f"  <b>{b['home_team']} vs {b['away_team']}</b>{bn} · {b['market']} @ <b>{b['bk_odds']}</b> · +{b['value']*100:.1f}%\n"
-    msg = f"📅 <b>Paris du {today} — {len(pending)} sélections</b>\n"
-    if home_b:
-        msg += f"\n🏠 <b>Domicile ({len(home_b)})</b>\n"
-        for b in home_b: msg += fmt(b)
-    if away_b:
-        msg += f"\n✈️ <b>Extérieur ({len(away_b)})</b>\n"
-        for b in away_b: msg += fmt(b)
-    if over_b:
-        msg += f"\n⚽ <b>Over/Under ({len(over_b)})</b>\n"
-        for b in over_b: msg += fmt(b)
-    if bn_b:
-        msg += f"\n🔥 <b>Bête Noire ({len(bn_b)})</b>\n"
-        for b in bn_b: msg += fmt(b)
-    send_message(msg)
-
-
-def handle_api():
-    from api_clients import get_odds_quota
-    quota = get_odds_quota()
+    quota     = get_odds_quota()
     remaining = quota.get("remaining")
     used      = quota.get("used")
     updated   = quota.get("last_update", "")[:16].replace("T", " ") if quota.get("last_update") else "jamais"
 
     if remaining is None:
         send_message(
-            "📡 <b>Quotas API</b>\n\n"
-            "⚠️ Pas encore de données — lancez /run pour initialiser.\n\n"
-            "<b>The Odds API</b> : plan gratuit = 500 req/mois\n"
-            "<b>Football-Data.org</b> : plan gratuit = 10 req/min"
+            "<b>Quotas API</b>\n\n"
+            "Pas encore de donnees -- lancez /run pour initialiser.\n\n"
+            "The Odds API : 500 req/mois\n"
+            "Football-Data.org : 10 req/min"
         )
         return
 
-    total = 500
-    pct   = round(remaining / total * 100)
+    total      = 500
+    pct        = round(remaining / total * 100)
     bar_filled = round(pct / 10)
-    bar = "█" * bar_filled + "░" * (10 - bar_filled)
-
-    color_hint = "🟢" if pct > 40 else "🟡" if pct > 15 else "🔴"
+    bar        = "#" * bar_filled + "." * (10 - bar_filled)
+    color      = "OK" if pct > 40 else "ATTENTION" if pct > 15 else "CRITIQUE"
 
     send_message(
-        f"📡 <b>Quotas API</b>\n\n"
-        f"<b>The Odds API</b> (500/mois)\n"
-        f"{color_hint} {bar} {pct}%\n"
-        f"  ✅ Utilisées : <b>{used}</b>\n"
-        f"  💚 Restantes : <b>{remaining}</b>\n"
-        f"  📅 Mis à jour : {updated}\n\n"
-        f"<b>Football-Data.org</b>\n"
-        f"  ⏱ Rate limit : 10 req/min (auto-géré)\n"
-        f"  🔄 Retry automatique sur 429"
+        f"<b>Quotas API</b>\n\n"
+        f"The Odds API (500/mois) -- {color}\n"
+        f"[{bar}] {pct}%\n"
+        f"Utilisees : <b>{used}</b>\n"
+        f"Restantes : <b>{remaining}</b>\n"
+        f"Mis a jour : {updated}\n\n"
+        f"Football-Data.org\n"
+        f"Rate limit : 10 req/min (auto-gere)"
     )
 
 
+def handle_today():
+    today      = datetime.now(timezone.utc).date().isoformat()
+    bets       = get_unique_bets(limit=200)
+    today_bets = [b for b in bets if b.get("match_date") == today]
+    pending    = [b for b in today_bets if b["success"] == -1]
+
+    if not pending:
+        send_message(f"Aucun paris pour aujourd'hui ({today})\nAnalyse a {SCHEDULER_HOUR:02d}h00 UTC.")
+        return
+
+    home_b = [b for b in pending if b["market"] == "Home Win"]
+    away_b = [b for b in pending if b["market"] == "Away Win"]
+    over_b = [b for b in pending if b["market"] not in ("Home Win", "Away Win")]
+    bn_b   = [b for b in pending if b.get("bete_noire")]
+
+    def fmt(b):
+        bn = " BETE NOIRE" if b.get("bete_noire") else ""
+        return f"  <b>{b['home_team']} vs {b['away_team']}</b>{bn} - {b['market']} @ <b>{b['bk_odds']}</b> - +{b['value']*100:.1f}%\n"
+
+    msg = f"<b>Paris du {today} -- {len(pending)} selections</b>\n"
+    if home_b:
+        msg += f"\n<b>Domicile ({len(home_b)})</b>\n"
+        for b in home_b: msg += fmt(b)
+    if away_b:
+        msg += f"\n<b>Exterieur ({len(away_b)})</b>\n"
+        for b in away_b: msg += fmt(b)
+    if over_b:
+        msg += f"\n<b>Over/Under ({len(over_b)})</b>\n"
+        for b in over_b: msg += fmt(b)
+    if bn_b:
+        msg += f"\n<b>Bete Noire ({len(bn_b)})</b>\n"
+        for b in bn_b: msg += fmt(b)
+    send_message(msg)
+
+
 def handle_h2h():
-    """Affiche le statut du cache H2H en DB et propose un refresh."""
     from database import get_h2h_cache_status
     rows = get_h2h_cache_status()
     if not rows:
         send_message(
-            "📭 <b>Cache H2H vide</b>\n\n"
-            "Les données H2H seront fetchées automatiquement au prochain run.\n"
+            "<b>Cache H2H vide</b>\n\n"
+            "Les donnees H2H seront fetchees au prochain run.\n"
             "Ou tapez /refreshh2h pour les charger maintenant."
         )
         return
@@ -770,29 +705,24 @@ def handle_h2h():
         name = LEAGUE_NAMES.get(r.get("league_id"), str(r.get("league_id")))
         by_league[name].append(r)
 
-    msg = "🔥 <b>Cache H2H en base de données</b>\n\n"
+    msg = "<b>Cache H2H en base de donnees</b>\n\n"
     for league_name, entries in sorted(by_league.items()):
         msg += f"<b>{league_name}</b>\n"
         for e in sorted(entries, key=lambda x: x.get("season", 0), reverse=True):
-            age = e.get("age_days", "?")
-            count = e.get("match_count", "?")
-            freshness = "✅" if (age or 99) <= 7 else "⚠️ expiré"
-            msg += f"  {e.get('season')} : {count} matchs · {age}j {freshness}\n"
+            age       = e.get("age_days", "?")
+            count     = e.get("match_count", "?")
+            freshness = "OK" if (age or 99) <= 7 else "EXPIRE"
+            msg += f"  {e.get('season')} : {count} matchs - {age}j {freshness}\n"
         msg += "\n"
 
-    msg += "<i>TTL : 7 jours · /refreshh2h pour forcer la mise à jour</i>"
+    msg += "TTL : 7 jours - /refreshh2h pour forcer"
     send_message(msg)
 
 
 def handle_refresh_h2h():
-    """Force le re-fetch de toutes les données H2H depuis football-data.org."""
-    from database import get_h2h_cache_status
     import database as db_module
-    import psycopg2, sqlite3
+    send_message("<b>Refresh H2H demarre...</b>\nQuelques minutes (rate limit FD).")
 
-    send_message("🔄 <b>Refresh H2H démarré...</b>\nCela peut prendre quelques minutes (rate limit FD).")
-
-    # Efface le cache DB H2H pour forcer le re-fetch
     conn = db_module.get_connection()
     try:
         cur = conn.cursor()
@@ -801,12 +731,8 @@ def handle_refresh_h2h():
     finally:
         conn.close()
 
-    # Efface aussi le cache mémoire
-    from api_clients import clear_h2h_cache
+    from api_clients import prefetch_season_matches
     clear_h2h_cache()
-
-    # Re-fetch pour toutes les ligues configurées
-    from api_clients import prefetch_season_matches, FOOTBALLDATA_LEAGUE_MAP
     current_season = int(os.getenv("SEASON", 2025))
     seasons = [current_season, current_season - 1]
     fetched = 0
@@ -816,94 +742,76 @@ def handle_refresh_h2h():
         if not FOOTBALLDATA_LEAGUE_MAP.get(league_id):
             continue
         try:
-            matches = prefetch_season_matches(league_id, seasons)
+            prefetch_season_matches(league_id, seasons)
             fetched += 1
-        except Exception as e:
+        except Exception:
             errors += 1
 
     send_message(
-        f"✅ <b>Refresh H2H terminé</b>\n\n"
-        f"✅ {fetched} ligues mises à jour\n"
-        f"{'❌ ' + str(errors) + ' erreurs' if errors else ''}\n"
-        f"<i>Cache valide 7 jours — 0 appel API au prochain run</i>"
+        f"<b>Refresh H2H termine</b>\n\n"
+        f"{fetched} ligues mises a jour\n"
+        + (f"{errors} erreurs\n" if errors else "")
+        + "Cache valide 7 jours"
     )
 
 
 def handle_redeploy():
-    """
-    Redéploie les services Railway via l'API GraphQL.
-    Nécessite RAILWAY_API_TOKEN + RAILWAY_SERVICE_ID_FOOT + RAILWAY_SERVICE_ID_BIATHLON
-    dans les variables d'env.
-    """
-    token        = os.getenv("RAILWAY_API_TOKEN", "")
-    svc_foot     = os.getenv("RAILWAY_SERVICE_ID_FOOT", "")
-    svc_biathlon = os.getenv("RAILWAY_SERVICE_ID_BIATHLON", "")
+    token  = os.getenv("RAILWAY_API_TOKEN", "")
+    svc_id = os.getenv("RAILWAY_SERVICE_ID", "")
 
     if not token:
         send_message(
-            "⚠️ <b>Redeploy impossible</b>\n"
-            "Variable <code>RAILWAY_API_TOKEN</code> manquante.\n"
-            "<i>Railway → Account Settings → Tokens → New Token</i>"
+            "<b>Redeploy impossible</b>\n"
+            "RAILWAY_API_TOKEN manquant.\n"
+            "Railway > Account Settings > Tokens > New Token"
         )
         return
 
-    import requests as req
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    results = []
+    if not svc_id:
+        send_message(
+            "<b>Redeploy impossible</b>\n"
+            "RAILWAY_SERVICE_ID manquant.\n"
+            "Railway > Settings du service > Service ID"
+        )
+        return
 
-    for name, svc_id in [("⚽ Foot", svc_foot), ("🎿 Biathlon", svc_biathlon)]:
-        if not svc_id:
-            results.append(f"⚠️ {name} : SERVICE_ID manquant")
-            continue
-        try:
-            resp = req.post(
-                "https://backboard.railway.app/graphql/v2",
-                headers=headers,
-                json={"query": f"""
-                    mutation {{
-                        serviceInstanceRedeploy(serviceId: "{svc_id}")
-                    }}
-                """},
-                timeout=10
-            )
-            data = resp.json()
-            if data.get("data", {}).get("serviceInstanceRedeploy"):
-                results.append(f"✅ {name} : redéploiement lancé")
-            else:
-                errors = data.get("errors", [{}])
-                results.append(f"❌ {name} : {errors[0].get('message', 'erreur inconnue')}")
-        except Exception as e:
-            results.append(f"❌ {name} : {e}")
+    try:
+        resp = requests.post(
+            "https://backboard.railway.app/graphql/v2",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"query": f'mutation {{ serviceInstanceRedeploy(serviceId: "{svc_id}") }}'},
+            timeout=10
+        )
+        data = resp.json()
+        if data.get("data", {}).get("serviceInstanceRedeploy"):
+            send_message("<b>Redeploy lance !</b>\nBot indisponible ~30s.")
+        else:
+            errs = data.get("errors", [{}])
+            send_message(f"<b>Redeploy echoue</b> : {errs[0].get('message', 'erreur inconnue')}")
+    except Exception as e:
+        send_message(f"<b>Redeploy echoue</b> : {e}")
 
-    send_message(
-        "🚀 <b>Redeploy Railway</b>\n\n" +
-        "\n".join(results) +
-        "\n\n<i>Le bot sera indisponible ~30s pendant le redémarrage.</i>"
-    )
 
+# ─────────────────────────────────────────────
+# COMMANDES → HANDLERS
+# ─────────────────────────────────────────────
 
 COMMANDS = {
-    "/help":          handle_help,
-    "/status":        handle_status,
-    "/bets":          handle_bets,
-    "/stats":         handle_stats,
-    "/pourcent":      handle_pourcent,
-    "/run":           handle_run,
-    "/refresh":       handle_refresh,
-    "/results":       handle_results,
-    "/reset":         handle_reset,
-    "/today":         handle_today,
-    "/api":           handle_api,
-    "/h2h":           handle_h2h,
-    "/refreshh2h":    handle_refresh_h2h,
-    "/web":           handle_web,
-    "/redeploy":      handle_redeploy,
-    # ── Biathlon ──
-    "/helpbiathlon":    handle_help_biathlon,
-    "/biathlon":        lambda: threading.Thread(target=handle_biathlon_cmd, daemon=True).start(),
-    "/biathlonrun":     lambda: threading.Thread(target=run_biathlon_cmd,    daemon=True).start(),
-    "/biathlonresults": lambda: threading.Thread(target=results_biathlon_cmd,daemon=True).start(),
-    "/biathlonstats":   lambda: threading.Thread(target=stats_biathlon_cmd,  daemon=True).start(),
+    "/help":       handle_help,
+    "/status":     handle_status,
+    "/bets":       handle_bets,
+    "/stats":      handle_stats,
+    "/pourcent":   handle_pourcent,
+    "/run":        handle_run,
+    "/refresh":    handle_refresh,
+    "/results":    handle_results,
+    "/reset":      handle_reset,
+    "/today":      handle_today,
+    "/api":        handle_api,
+    "/h2h":        handle_h2h,
+    "/refreshh2h": handle_refresh_h2h,
+    "/web":        handle_web,
+    "/redeploy":   handle_redeploy,
 }
 
 
@@ -913,20 +821,20 @@ COMMANDS = {
 
 def telegram_polling():
     if not TELEGRAM_TOKEN:
-        log.warning("⚠️ TELEGRAM_BOT_TOKEN manquant — polling désactivé.")
+        log.warning("TELEGRAM_BOT_TOKEN manquant -- polling desactive.")
         return
 
     base_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     offset   = None
 
-    log.info(f"📲 Telegram polling démarré — chat_id autorisé : {TELEGRAM_CHAT}")
+    log.info(f"Telegram polling demarre -- chat_id : {TELEGRAM_CHAT}")
 
     try:
         resp    = requests.get(f"{base_url}/getUpdates", params={"offset": -1}, timeout=10)
         results = resp.json().get("result", [])
         if results:
             offset = results[-1]["update_id"] + 1
-            log.info(f"  {len(results)} anciens messages ignorés, offset={offset}")
+            log.info(f"  {len(results)} anciens messages ignores, offset={offset}")
     except Exception as e:
         log.error(f"  Erreur init polling: {e}")
 
@@ -935,6 +843,7 @@ def telegram_polling():
             params = {"timeout": 5, "allowed_updates": ["message"]}
             if offset:
                 params["offset"] = offset
+
             resp    = requests.get(f"{base_url}/getUpdates", params=params, timeout=10)
             updates = resp.json().get("result", [])
 
@@ -944,22 +853,21 @@ def telegram_polling():
                 text    = msg.get("text", "").strip().split()[0].lower()
                 from_id = str(msg.get("chat", {}).get("id", ""))
 
-                log.info(f"📩 Message reçu : '{text}' de {from_id}")
+                log.info(f"Message recu : '{text}' de {from_id}")
 
                 if TELEGRAM_CHAT and from_id != TELEGRAM_CHAT:
-                    log.warning(f"  Ignoré — chat_id non autorisé : {from_id}")
+                    log.warning(f"  Ignore -- chat_id non autorise : {from_id}")
                     continue
 
                 if text in COMMANDS:
-                    log.info(f"  → Exécution : {text}")
+                    log.info(f"  Execution : {text}")
                     try:
                         COMMANDS[text]()
                     except Exception as e:
                         log.error(f"  Erreur {text}: {e}")
-                        send_message(f"❌ Erreur {text} : {e}")
+                        send_message(f"Erreur {text} : {e}")
                 elif text.startswith("/"):
-                    # Commande inconnue → silence (pas de flood help)
-                    log.info(f"  Commande inconnue ignorée : {text}")
+                    log.info(f"  Commande inconnue ignoree : {text}")
 
         except requests.exceptions.Timeout:
             pass
@@ -977,9 +885,8 @@ def run_scheduler():
 
     worker_state["started_at"] = datetime.now(timezone.utc)
 
-    log.info("Démarrage thread polling Telegram...")
     threading.Thread(target=telegram_polling, daemon=True).start()
-    log.info("Thread polling démarré ✅")
+    log.info("Thread polling demarre")
 
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
@@ -997,36 +904,19 @@ def run_scheduler():
         kwargs={"silent": False}
     )
 
-    # Jobs biathlon (si module disponible)
-    if BIATHLON_ENABLED:
-        init_biathlon_db()
-        scheduler.add_job(
-            run_biathlon_full_analysis, "cron",
-            hour=int(os.getenv("BIATHLON_ANALYSIS_HOUR", 7)), minute=30,
-            id="biathlon_analysis", kwargs={"silent": False}
-        )
-        scheduler.add_job(
-            check_biathlon_results, "cron",
-            hour=int(os.getenv("BIATHLON_RESULTS_HOUR", 22)), minute=0,
-            id="biathlon_results", kwargs={"silent": False}
-        )
-        log.info("🎿 Jobs biathlon ajoutés au scheduler")
+    log.info(f"Scheduler : refresh 06h - analyse {SCHEDULER_HOUR:02d}h - resultats 23h UTC")
 
-    log.info(f"⏰ Foot: refresh 06h, analyse {SCHEDULER_HOUR:02d}h, résultats 23h UTC")
-
-    biathlon_status = "✅ opérationnel" if BIATHLON_ENABLED else "❌ non disponible"
     send_message(
-        f"🐺 <b>Le Loup de Wall Bet est lancé</b> — {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
-        f"⚽ Foot : ✅ opérationnel\n"
-        f"🎿 Biathlon : {biathlon_status}\n"
-        f"💬 /help · /helpbiathlon"
+        f"<b>Le Loup de Wall Bet est lance</b> -- {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
+        f"Worker operationnel\n"
+        f"/help pour les commandes"
     )
 
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
-        log.info("Scheduler arrêté.")
-        send_message("🛑 <b>Worker ValueBet arrêté.</b>")
+        log.info("Scheduler arrete.")
+        send_message("<b>Worker ValueBet arrete.</b>")
 
 
 # ─────────────────────────────────────────────
@@ -1046,4 +936,4 @@ if __name__ == "__main__":
     elif command == "results":
         check_results()
     else:
-        print(f"Usage: python scheduler.py [run|refresh|schedule|results]")
+        print("Usage: python scheduler.py [run|refresh|schedule|results]")
