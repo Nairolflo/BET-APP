@@ -179,7 +179,7 @@ def run(silent=False):
     log.info("[Biathlon] Analyse démarrée (mode prédiction pure)")
 
     try:
-        from biathlon.biathlon_client import get_upcoming_races, get_cup_standings, RACE_FORMATS
+        from sports.biathlon.biathlon_client import get_upcoming_races, get_cup_standings, RACE_FORMATS
         from biathlon.biathlon_model  import predict_h2h
 
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
@@ -296,7 +296,7 @@ def check_results(silent=False):
         return
 
     try:
-        from biathlon.biathlon_client import get_competitions, get_results
+        from sports.biathlon.biathlon_client import get_competitions, get_results
     except ImportError as e:
         log.error(f"[Biathlon] Import error: {e}")
         return

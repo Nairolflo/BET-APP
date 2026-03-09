@@ -14,7 +14,7 @@ def handle_status():
     from sports.biathlon.jobs import state, BIATHLON_DAYS_AHEAD, ANALYSIS_HOUR
 
     try:
-        from biathlon.biathlon_client import get_upcoming_races
+        from sports.biathlon.biathlon_client import get_upcoming_races
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
     except Exception as e:
         send_message(f"❌ Impossible de contacter l'API IBU : {e}")
