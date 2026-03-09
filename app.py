@@ -12,7 +12,6 @@ from database import (
     get_stats_by_market, get_stats_by_league_detailed,
     get_bete_noire_bets, get_roi_over_time, get_streak,
 )
-from api_clients import get_odds_api_usage
 
 app = Flask(__name__)
 
@@ -48,20 +47,7 @@ def stats_page():
     # Best market
     resolved    = [m for m in by_market if (m.get("total",0) - m.get("pending",0)) >= 3]
     best_market = max(resolved, key=lambda x: x.get("roi", -999)) if resolved else None
-    # Bête noire stats
     bn_bets = get_bete_noire_bets(limit=500)
-    bn_wins    = sum(1 for b in bn_bets if b.get("success") == 1)
-    bn_losses  = sum(1 for b in bn_bets if b.get("success") == 0)
-    bn_pending = sum(1 for b in bn_bets if b.get("success") == -1)
-    bn_settled = max(bn_wins + bn_losses, 1)
-    bn_stats = {
-        "total":    len(bn_bets),
-        "wins":     bn_wins,
-        "losses":   bn_losses,
-        "pending":  bn_pending,
-        "win_rate": round(bn_wins / bn_settled * 100, 1),
-        "roi":      round((bn_wins - bn_losses) / bn_settled * 100, 1),
-    }
     return render_template(
         "stats.html",
         stats=stats,
@@ -70,7 +56,7 @@ def stats_page():
         roi_time=roi_time,
         streak=streak,
         best_market=best_market,
-        bn_stats=bn_stats,
+        bn_bets=bn_bets,
     )
 
 # bete_noire page merged into /stats
@@ -152,6 +138,84 @@ def api_quota():
 
 
 
+
+
+# ─────────────────────────────────────────────
+# BIATHLON ROUTES
+# ─────────────────────────────────────────────
+
+@app.route("/biathlon")
+def biathlon_live():
+    """Page principale biathlon — H2H, vainqueur, podium, calendrier."""
+    try:
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "biathlon"))
+        from biathlon.biathlon_client import get_upcoming_races
+        upcoming = get_upcoming_races(days_ahead=10)
+    except Exception:
+        upcoming = []
+
+    # Bets biathlon depuis la DB
+    try:
+        from database import get_connection, ph, rows_to_dicts
+        conn = get_connection()
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT * FROM biathlon_bets
+            ORDER BY created_at DESC LIMIT 100
+        """)
+        bets = rows_to_dicts(cur, cur.fetchall())
+        conn.close()
+    except Exception:
+        bets = []
+
+    h2h_bets     = [b for b in bets if b.get("bet_type") == "H2H"]
+    winner_bets  = [b for b in bets if b.get("bet_type") == "WINNER"]
+    top3_bets    = [b for b in bets if b.get("bet_type") == "TOP3"]
+
+    # Stats globales biathlon
+    total   = len([b for b in bets if b.get("result") != "PENDING"])
+    wins    = len([b for b in bets if b.get("result") == "WIN"])
+    losses  = len([b for b in bets if b.get("result") == "LOSS"])
+    pending = len([b for b in bets if b.get("result") == "PENDING"])
+    win_rate = round(wins / total * 100, 1) if total else 0
+    roi      = round((wins * 1.8 - losses) / total * 100, 1) if total else 0  # approx
+
+    return render_template("biathlon.html",
+        h2h_bets        = h2h_bets,
+        winner_bets     = winner_bets,
+        top3_predictions= [],   # rempli par le worker
+        upcoming_races  = upcoming,
+        stats           = {
+            "total": total, "wins": wins, "losses": losses,
+            "pending": pending, "win_rate": win_rate, "roi": roi
+        }
+    )
+
+@app.route("/biathlon/h2h")
+def biathlon_h2h():
+    return redirect("/biathlon")
+
+@app.route("/biathlon/podium")
+def biathlon_podium():
+    return redirect("/biathlon")
+
+@app.route("/biathlon/stats")
+def biathlon_stats():
+    return redirect("/biathlon")
+
+@app.route("/api/biathlon/bets")
+def api_biathlon_bets():
+    try:
+        from database import get_connection, rows_to_dicts
+        conn = get_connection()
+        cur  = conn.cursor()
+        cur.execute("SELECT * FROM biathlon_bets ORDER BY created_at DESC LIMIT 200")
+        bets = rows_to_dicts(cur, cur.fetchall())
+        conn.close()
+        return jsonify(bets)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     init_db()

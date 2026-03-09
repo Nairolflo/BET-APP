@@ -3,76 +3,110 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}ValueBet Bot{% endblock %}</title>
+    <title>{% block title %}Le Loup de Wall Bet{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0a0c14;
-            --surface: #13162a;
-            --surface2: #1c2040;
-            --surface3: #252950;
-            --accent: #7c6fff;
-            --accent2: #00e5b0;
-            --accent3: #ff6b6b;
-            --yellow: #ffd166;
-            --blue: #4fc3f7;
-            --text: #e8eaf6;
-            --text-dim: #7b7fa8;
-            --border: #252950;
-            --success: #06d6a0;
-            --fail: #ef476f;
+            --bg:       #080a10;
+            --surface:  #0f1120;
+            --surface2: #161929;
+            --surface3: #1e2235;
+            --border:   #1e2235;
+            --accent:   #e8c84a;   /* or — foot */
+            --accent2:  #4af0c8;   /* cyan — biathlon */
+            --accent3:  #ff5e5e;   /* rouge — danger/value */
+            --text:     #f0f2ff;
+            --text-dim: #6b7194;
+            --success:  #06d6a0;
+            --fail:     #ef476f;
+            --yellow:   #ffd166;
+            --blue:     #4fc3f7;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             background: var(--bg);
             color: var(--text);
-            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-family: 'Inter', system-ui, sans-serif;
             min-height: 100vh;
         }
 
-        /* ── NAV ── */
-        nav {
+        /* ── TOP NAV ─────────────────────────────── */
+        .topnav {
             background: var(--surface);
             border-bottom: 1px solid var(--border);
-            padding: 0 2rem;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            padding: 0 1.5rem;
+            gap: 0;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+        }
+
+        /* Logo */
+        .topnav .logo {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 1.45rem;
+            letter-spacing: 2px;
+            color: var(--accent);
+            text-shadow: 0 0 20px #e8c84a40;
+            margin-right: 1.5rem;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .topnav .logo span { color: var(--text-dim); font-size: 1rem; }
+
+        /* Séparateur vertical */
+        .nav-sep {
+            width: 1px;
+            height: 22px;
+            background: var(--border);
+            margin: 0 1rem;
+            flex-shrink: 0;
+        }
+
+        /* Section label */
+        .nav-section {
+            font-size: 0.68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-dim);
+            margin-right: 0.5rem;
+            flex-shrink: 0;
+        }
+        .nav-section.foot  { color: var(--accent); }
+        .nav-section.biathl { color: var(--accent2); }
+
+        /* Nav links */
+        .topnav a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.82rem;
+            font-weight: 500;
+            padding: 0.35rem 0.75rem;
+            border-radius: 7px;
+            transition: all 0.15s;
+            white-space: nowrap;
             display: flex;
             align-items: center;
             gap: 0.3rem;
-            height: 58px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
         }
-        nav .logo {
-            font-size: 1.1rem;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--accent), var(--accent2));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-right: 1rem;
-            letter-spacing: 0.5px;
-        }
-        nav a {
-            color: var(--text-dim);
-            text-decoration: none;
-            font-size: 0.875rem;
-            font-weight: 500;
-            padding: 0.4rem 0.9rem;
-            border-radius: 8px;
-            transition: all 0.15s;
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
-        nav a:hover { color: var(--text); background: var(--surface2); }
-        nav a.active { color: var(--text); background: var(--surface3); }
+        .topnav a:hover { color: var(--text); background: var(--surface2); }
+        .topnav a.active-foot    { color: #1a1200; background: var(--accent); font-weight: 700; }
+        .topnav a.active-biathl  { color: #001a14; background: var(--accent2); font-weight: 700; }
+        .topnav a.active-foot:hover   { background: var(--accent); }
+        .topnav a.active-biathl:hover { background: var(--accent2); }
 
-        /* ── LAYOUT ── */
-        .container { max-width: 1380px; margin: 0 auto; padding: 2rem; }
+        /* ── LAYOUT ──────────────────────────────── */
+        .container { max-width: 1400px; margin: 0 auto; padding: 2rem 1.5rem; }
         .page-header { margin-bottom: 2rem; }
-        .page-header h1 { font-size: 1.5rem; font-weight: 700; }
-        .page-header p  { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.3rem; }
+        .page-header h1 { font-size: 1.5rem; font-weight: 800; }
+        .page-header p  { color: var(--text-dim); font-size: 0.875rem; margin-top: 0.3rem; }
 
-        /* ── CARDS ── */
+        /* ── CARDS ───────────────────────────────── */
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -80,7 +114,7 @@
             padding: 1.5rem;
         }
         .card-title {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.8px;
@@ -88,21 +122,21 @@
             margin-bottom: 1rem;
         }
 
-        /* ── STAT GRID ── */
-        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        /* ── STAT GRID ───────────────────────────── */
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
         .stat-card {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 12px;
-            padding: 1.3rem 1rem;
+            padding: 1.2rem 1rem;
             text-align: center;
             transition: border-color 0.2s;
         }
         .stat-card:hover { border-color: var(--accent); }
-        .stat-card .val  { font-size: 1.9rem; font-weight: 800; color: var(--accent2); line-height: 1; }
-        .stat-card .lbl  { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.4rem; }
+        .stat-card .val  { font-size: 1.8rem; font-weight: 800; color: var(--accent2); line-height: 1; }
+        .stat-card .lbl  { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.4rem; }
 
-        /* ── TABLE ── */
+        /* ── TABLE ───────────────────────────────── */
         .table-wrap { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
         thead tr { border-bottom: 2px solid var(--border); }
@@ -112,45 +146,42 @@
             color: var(--text-dim);
             font-weight: 600;
             text-transform: uppercase;
-            font-size: 0.72rem;
+            font-size: 0.7rem;
             letter-spacing: 0.6px;
             white-space: nowrap;
         }
         td { padding: 0.7rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
         tr:hover td { background: var(--surface2); }
 
-        /* ── BADGES ── */
-        .badge {
-            display: inline-block;
-            padding: 0.18rem 0.55rem;
-            border-radius: 20px;
-            font-size: 0.76rem;
-            font-weight: 600;
-        }
+        /* ── BADGES ──────────────────────────────── */
+        .badge { display: inline-block; padding: 0.18rem 0.55rem; border-radius: 20px; font-size: 0.74rem; font-weight: 600; }
         .badge-win     { background: #06d6a015; color: var(--success); border: 1px solid #06d6a030; }
         .badge-loss    { background: #ef476f15; color: var(--fail);    border: 1px solid #ef476f30; }
         .badge-pending { background: #ffd16615; color: var(--yellow);  border: 1px solid #ffd16630; }
-        .badge-league  { background: var(--surface2); color: var(--accent); border: 1px solid var(--border); font-size: 0.72rem; }
-        .badge-market  { background: var(--surface3); color: var(--blue); border: 1px solid var(--border); font-size: 0.72rem; }
-        .badge-bn      { background: #ff6b6b15; color: #ff9999; border: 1px solid #ff6b6b30; font-size: 0.72rem; }
+        .badge-league  { background: var(--surface2); color: var(--accent); border: 1px solid var(--border); font-size: 0.7rem; }
+        .badge-market  { background: var(--surface3); color: var(--blue);   border: 1px solid var(--border); font-size: 0.7rem; }
+        .badge-bn      { background: #ff6b6b15; color: #ff9999; border: 1px solid #ff6b6b30; font-size: 0.7rem; }
+        .badge-h2h     { background: #4af0c815; color: var(--accent2); border: 1px solid #4af0c830; font-size: 0.7rem; }
+        .badge-top3    { background: #e8c84a15; color: var(--accent);  border: 1px solid #e8c84a30; font-size: 0.7rem; }
+        .badge-value   { background: #ff5e5e15; color: var(--accent3); border: 1px solid #ff5e5e30; font-size: 0.7rem; }
 
-        /* ── VALUE COLORS ── */
+        /* ── VALUE COLORS ────────────────────────── */
         .c-high { color: var(--success); font-weight: 700; }
         .c-mid  { color: var(--yellow);  font-weight: 600; }
         .c-low  { color: var(--text-dim); }
         .c-pos  { color: var(--success); }
         .c-neg  { color: var(--fail); }
 
-        /* ── PROGRESS BAR ── */
-        .progress { background: var(--surface2); border-radius: 20px; overflow: hidden; height: 8px; }
-        .progress-bar { height: 100%; border-radius: 20px; transition: width 1s; }
+        /* ── PROGRESS ────────────────────────────── */
+        .progress { background: var(--surface2); border-radius: 20px; overflow: hidden; height: 7px; }
+        .progress-bar { height: 100%; border-radius: 20px; transition: width 0.8s; }
 
-        /* ── TABS ── */
-        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        /* ── TABS ────────────────────────────────── */
+        .tabs { display: flex; gap: 0.4rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
         .tab {
-            padding: 0.5rem 1.1rem;
-            border-radius: 8px;
-            font-size: 0.85rem;
+            padding: 0.45rem 1rem;
+            border-radius: 7px;
+            font-size: 0.82rem;
             font-weight: 600;
             cursor: pointer;
             border: 1px solid var(--border);
@@ -159,48 +190,133 @@
             transition: all 0.15s;
         }
         .tab:hover  { background: var(--surface2); color: var(--text); }
-        .tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+        .tab.active { background: var(--accent); border-color: var(--accent); color: #1a1200; }
+        .tab.active-cyan { background: var(--accent2); border-color: var(--accent2); color: #001a14; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
 
-        /* ── MISC ── */
+        /* ── MATCH CARD biathlon ─────────────────── */
+        .h2h-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.2rem 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transition: border-color 0.2s;
+        }
+        .h2h-card:hover { border-color: var(--accent2); }
+        .h2h-card .athlete { flex: 1; text-align: center; }
+        .h2h-card .athlete .name { font-weight: 700; font-size: 0.95rem; }
+        .h2h-card .athlete .nat  { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.2rem; }
+        .h2h-card .athlete .prob { font-size: 1.5rem; font-weight: 800; margin-top: 0.4rem; }
+        .h2h-card .vs { font-family: 'Bebas Neue', sans-serif; font-size: 1.2rem; color: var(--text-dim); flex-shrink: 0; }
+        .h2h-card .odd-tag {
+            background: var(--surface3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.3rem 0.7rem;
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .h2h-card .value-badge {
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.2rem 0.5rem;
+            border-radius: 6px;
+            background: #ff5e5e20;
+            color: var(--accent3);
+            border: 1px solid #ff5e5e30;
+        }
+
+        /* ── PODIUM ──────────────────────────────── */
+        .podium-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .podium-card .podium-header {
+            background: linear-gradient(135deg, #0f1120, #1e2235);
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .podium-row {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            gap: 1rem;
+            transition: background 0.15s;
+        }
+        .podium-row:last-child { border-bottom: none; }
+        .podium-row:hover { background: var(--surface2); }
+        .podium-row .rank  { font-family: 'Bebas Neue', sans-serif; font-size: 1.3rem; width: 2rem; text-align: center; }
+        .podium-row .pname { font-weight: 700; flex: 1; }
+        .podium-row .pnat  { font-size: 0.72rem; color: var(--text-dim); }
+        .podium-row .pbar  { flex: 2; }
+        .podium-row .ppct  { font-weight: 800; font-size: 0.95rem; color: var(--accent2); min-width: 3.5rem; text-align: right; }
+
+        /* ── MISC ────────────────────────────────── */
         .empty { text-align: center; color: var(--text-dim); padding: 3rem; }
         .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; }
         .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }
-        .mt1 { margin-top: 1rem; }   .mt2 { margin-top: 1.5rem; }   .mt3 { margin-top: 2rem; }
+        .mt1 { margin-top: 1rem; } .mt2 { margin-top: 1.5rem; } .mt3 { margin-top: 2rem; }
         .mb1 { margin-bottom: 1rem; } .mb2 { margin-bottom: 1.5rem; }
-        h2 { font-size: 1.15rem; font-weight: 700; color: var(--accent); margin-bottom: 1rem; }
+        h2 { font-size: 1.1rem; font-weight: 800; color: var(--accent); margin-bottom: 1rem; }
+        h2.cyan { color: var(--accent2); }
         h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.8rem; }
         .chip {
             display: inline-block;
             padding: 0.15rem 0.5rem;
             border-radius: 6px;
-            font-size: 0.72rem;
+            font-size: 0.7rem;
             font-weight: 600;
             background: var(--surface3);
             color: var(--text-dim);
         }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
     </style>
 </head>
 <body>
-    <nav>
-        <span class="logo">⚽ ValueBet</span>
-        <a href="/" {% if request.path == '/' %}class="active"{% endif %}>🏠 Dashboard</a>
-        <a href="/live" {% if request.path == '/live' %}class="active"{% endif %}>⚡ Aujourd'hui</a>
-        <a href="/history" {% if request.path == '/history' %}class="active"{% endif %}>📋 Historique</a>
-        <a href="/stats" {% if request.path == '/stats' %}class="active"{% endif %}>📊 Statistiques</a>
-        <a href="/config" {% if request.path == '/config' %}class="active"{% endif %}>⚙️ Config</a>
+    <nav class="topnav">
+        <span class="logo">🐺 LE LOUP<span> DE WALL BET</span></span>
+
+        <div class="nav-sep"></div>
+        <span class="nav-section foot">⚽ FOOT</span>
+        <a href="/"        {% if request.path == '/' %}class="active-foot"{% endif %}>Dashboard</a>
+        <a href="/live"    {% if request.path == '/live' %}class="active-foot"{% endif %}>Aujourd'hui</a>
+        <a href="/history" {% if request.path == '/history' %}class="active-foot"{% endif %}>Historique</a>
+        <a href="/stats"   {% if request.path == '/stats' %}class="active-foot"{% endif %}>Stats</a>
+
+        <div class="nav-sep"></div>
+        <span class="nav-section biathl">🎿 BIATHLON</span>
+        <a href="/biathlon"        {% if request.path == '/biathlon' %}class="active-biathl"{% endif %}>Live</a>
+        <a href="/biathlon/podium" {% if request.path == '/biathlon/podium' %}class="active-biathl"{% endif %}>Podiums</a>
+        <a href="/biathlon/h2h"    {% if request.path == '/biathlon/h2h' %}class="active-biathl"{% endif %}>H2H</a>
+        <a href="/biathlon/stats"  {% if request.path == '/biathlon/stats' %}class="active-biathl"{% endif %}>Stats</a>
+
+        <div class="nav-sep"></div>
+        <a href="/config"  {% if request.path == '/config' %}class="active-foot"{% endif %}>⚙️</a>
     </nav>
     {% block content %}{% endblock %}
     <script>
-    // Système de tabs universel
     document.querySelectorAll('.tab').forEach(tab => {
         tab.addEventListener('click', () => {
-            const group = tab.dataset.group;
+            const group  = tab.dataset.group;
             const target = tab.dataset.target;
-            document.querySelectorAll(`.tab[data-group="${group}"]`).forEach(t => t.classList.remove('active'));
+            document.querySelectorAll(`.tab[data-group="${group}"]`).forEach(t => t.classList.remove('active','active-cyan'));
             document.querySelectorAll(`.tab-content[data-group="${group}"]`).forEach(c => c.classList.remove('active'));
-            tab.classList.add('active');
+            tab.classList.add(tab.dataset.cyan ? 'active-cyan' : 'active');
             document.querySelector(`.tab-content[data-group="${group}"][data-id="${target}"]`)?.classList.add('active');
         });
     });

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Biathlon Live — Le Loup de Wall Bet{% endblock %}
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>🎿 Biathlon — Live</h1>
+        <p>Value bets H2H · Vainqueur · Podium Top 3 — mis à jour automatiquement</p>
+    </div>
+
+    <!-- KPIs biathlon -->
+    <div class="stat-grid">
+        <div class="stat-card">
+            <div class="val" style="color:var(--accent2)" id="kpi-total">{{ stats.total or 0 }}</div>
+            <div class="lbl">Bets totaux</div>
+        </div>
+        <div class="stat-card">
+            <div class="val c-high" id="kpi-wins">{{ stats.wins or 0 }}</div>
+            <div class="lbl">Gagnés</div>
+        </div>
+        <div class="stat-card">
+            <div class="val c-neg" id="kpi-losses">{{ stats.losses or 0 }}</div>
+            <div class="lbl">Perdus</div>
+        </div>
+        <div class="stat-card">
+            <div class="val" style="color:var(--yellow)" id="kpi-pending">{{ stats.pending or 0 }}</div>
+            <div class="lbl">En attente</div>
+        </div>
+        <div class="stat-card">
+            <div class="val {% if (stats.win_rate or 0) >= 55 %}c-high{% elif (stats.win_rate or 0) >= 45 %}c-mid{% else %}c-neg{% endif %}" id="kpi-wr">
+                {{ stats.win_rate or 0 }}%
+            </div>
+            <div class="lbl">Win Rate</div>
+        </div>
+        <div class="stat-card">
+            <div class="val {% if (stats.roi or 0) > 0 %}c-high{% else %}c-neg{% endif %}" id="kpi-roi">
+                {% if (stats.roi or 0) > 0 %}+{% endif %}{{ stats.roi or 0 }}%
+            </div>
+            <div class="lbl">ROI</div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab active-cyan" data-group="main" data-target="h2h" data-cyan="1">⚔️ H2H</div>
+        <div class="tab" data-group="main" data-target="winner" data-cyan="1">🏆 Vainqueur</div>
+        <div class="tab" data-group="main" data-target="top3" data-cyan="1">🎖️ Top 3</div>
+        <div class="tab" data-group="main" data-target="upcoming" data-cyan="1">📅 Calendrier</div>
+    </div>
+
+    <!-- H2H -->
+    <div class="tab-content active" data-group="main" data-id="h2h">
+        {% if h2h_bets %}
+        <div style="display:flex;flex-direction:column;gap:0.8rem">
+            {% for b in h2h_bets %}
+            <div class="h2h-card">
+                <div class="athlete">
+                    <div class="name">{{ b.pick }}</div>
+                    <div class="nat">{{ b.pick_nat or '' }}</div>
+                    <div class="prob" style="color:var(--accent2)">{{ "%.0f"|format(b.prob_model * 100) }}%</div>
+                    <div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.2rem">modèle</div>
+                </div>
+                <div style="text-align:center;flex-shrink:0">
+                    <div class="vs">VS</div>
+                    <div class="odd-tag mt1">{{ b.odd }}</div>
+                    <div class="value-badge mt1">+{{ "%.1f"|format(b.value_pct) }}%</div>
+                    <div style="font-size:0.68rem;color:var(--text-dim);margin-top:0.4rem">{{ b.bookmaker }}</div>
+                </div>
+                <div class="athlete">
+                    <div class="name">{{ b.opponent }}</div>
+                    <div class="nat">{{ b.opponent_nat or '' }}</div>
+                    <div class="prob" style="color:var(--text-dim)">{{ "%.0f"|format((1 - b.prob_model) * 100) }}%</div>
+                    <div style="font-size:0.7rem;color:var(--text-dim);margin-top:0.2rem">modèle</div>
+                </div>
+                <div style="min-width:110px;text-align:right">
+                    <div class="badge badge-h2h">{{ b.race_format or 'H2H' }}</div>
+                    <div style="font-size:0.72rem;color:var(--text-dim);margin-top:0.4rem">{{ b.race_date or '' }}</div>
+                    <div style="font-size:0.7rem;color:var(--text-dim)">Kelly {{ "%.1f"|format((b.kelly or 0) * 100) }}%</div>
+                    <div class="badge {% if b.result == 'WIN' %}badge-win{% elif b.result == 'LOSS' %}badge-loss{% else %}badge-pending{% endif %} mt1">
+                        {{ b.result or 'EN ATTENTE' }}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">
+            <div style="font-size:2rem;margin-bottom:1rem">⚔️</div>
+            <div>Aucun value bet H2H détecté pour l'instant</div>
+            <div style="font-size:0.8rem;margin-top:0.5rem">Les cotes H2H apparaissent ~48h avant les grandes épreuves</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Vainqueur -->
+    <div class="tab-content" data-group="main" data-id="winner">
+        {% if winner_bets %}
+        <div class="table-wrap">
+        <table>
+            <thead><tr>
+                <th>Athlète</th><th>Course</th><th>Cote</th>
+                <th>Modèle</th><th>Implicite</th><th>Value</th><th>Kelly</th><th>Statut</th>
+            </tr></thead>
+            <tbody>
+            {% for b in winner_bets %}
+            <tr>
+                <td><strong>{{ b.pick }}</strong></td>
+                <td>
+                    <span class="badge badge-h2h">{{ b.race_format }}</span>
+                    <span style="margin-left:0.4rem;font-size:0.82rem">{{ b.race_name }}</span>
+                </td>
+                <td style="font-weight:700;color:var(--accent)">{{ b.odd }}</td>
+                <td class="c-high">{{ "%.0f"|format(b.prob_model * 100) }}%</td>
+                <td style="color:var(--text-dim)">{{ "%.0f"|format(b.prob_implied * 100) }}%</td>
+                <td><span class="badge badge-value">+{{ "%.1f"|format(b.value_pct) }}%</span></td>
+                <td style="color:var(--text-dim)">{{ "%.1f"|format((b.kelly or 0)*100) }}%</td>
+                <td><span class="badge {% if b.result == 'WIN' %}badge-win{% elif b.result == 'LOSS' %}badge-loss{% else %}badge-pending{% endif %}">{{ b.result or 'PENDING' }}</span></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div class="empty">
+            <div style="font-size:2rem;margin-bottom:1rem">🏆</div>
+            <div>Aucun value bet vainqueur pour l'instant</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Top 3 -->
+    <div class="tab-content" data-group="main" data-id="top3">
+        {% if top3_predictions %}
+        <div class="grid-2">
+            {% for pred in top3_predictions %}
+            <div class="podium-card">
+                <div class="podium-header">
+                    <div>
+                        <div style="font-weight:700">{{ pred.race_name }}</div>
+                        <div style="font-size:0.75rem;color:var(--text-dim)">{{ pred.race_date }} · {{ pred.location }}</div>
+                    </div>
+                    <span class="badge badge-h2h">{{ pred.race_format }}</span>
+                </div>
+                {% for i, a in pred.athletes[:8]|enumerate %}
+                <div class="podium-row">
+                    <div class="rank" style="color:{% if i == 0 %}#ffd700{% elif i == 1 %}#c0c0c0{% elif i == 2 %}#cd7f32{% else %}var(--text-dim){% endif %}">
+                        {% if i == 0 %}🥇{% elif i == 1 %}🥈{% elif i == 2 %}🥉{% else %}{{ i+1 }}{% endif %}
+                    </div>
+                    <div style="flex:1">
+                        <div class="pname">{{ a.name }}</div>
+                        <div class="pnat">{{ a.nat }}</div>
+                    </div>
+                    <div class="pbar">
+                        <div class="progress">
+                            <div class="progress-bar" style="width:{{ (a.p_top3 * 100)|round }}%;background:{% if i < 3 %}var(--accent2){% else %}var(--surface3){% endif %}"></div>
+                        </div>
+                    </div>
+                    <div class="ppct">{{ "%.0f"|format(a.p_top3 * 100) }}%</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">
+            <div style="font-size:2rem;margin-bottom:1rem">🎖️</div>
+            <div>Prédictions podium disponibles le matin des courses</div>
+            <div style="font-size:0.8rem;margin-top:0.5rem">Le worker calcule les Top 3 à 07h30 UTC</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Calendrier -->
+    <div class="tab-content" data-group="main" data-id="upcoming">
+        {% if upcoming_races %}
+        <div style="display:flex;flex-direction:column;gap:0.6rem">
+            {% for r in upcoming_races %}
+            <div class="card" style="display:flex;align-items:center;gap:1.2rem;padding:1rem 1.5rem">
+                <div style="font-size:1.5rem">{% if r.gender == 'W' %}♀️{% else %}♂️{% endif %}</div>
+                <div style="flex:1">
+                    <div style="font-weight:700">{{ r.description }}</div>
+                    <div style="font-size:0.78rem;color:var(--text-dim)">{{ r.location }}</div>
+                </div>
+                <span class="badge badge-league">{{ r.format_name }}</span>
+                <div style="font-size:0.82rem;color:var(--text-dim);min-width:80px;text-align:right">{{ r.date }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">
+            <div style="font-size:2rem;margin-bottom:1rem">📅</div>
+            <div>Aucune course dans les 10 prochains jours</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+// Active le premier tab cyan au chargement
+document.querySelectorAll('.tab[data-cyan]').forEach(tab => {
+    tab.addEventListener('click', () => {
+        const group = tab.dataset.group;
+        document.querySelectorAll(`.tab[data-group="${group}"]`).forEach(t => {
+            t.classList.remove('active', 'active-cyan');
+        });
+        tab.classList.add('active-cyan');
+        document.querySelectorAll(`.tab-content[data-group="${group}"]`).forEach(c => c.classList.remove('active'));
+        document.querySelector(`.tab-content[data-group="${group}"][data-id="${tab.dataset.target}"]`)?.classList.add('active');
+    });
+});
+</script>
+{% endblock %}
