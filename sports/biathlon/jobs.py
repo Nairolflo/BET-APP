@@ -19,6 +19,74 @@ state = {
 }
 
 
+def _get_top_athletes(gender: str, fmt_code: str) -> list:
+    """
+    Récupère les top athlètes depuis le classement CdM.
+    Essaie plusieurs formats d'IBU_ID, log la structure reçue.
+    Fallback : résultats des dernières courses du même format.
+    """
+    try:
+        from sports.biathlon.biathlon_client import (
+            get_cup_standings, get_competitions, get_results,
+            CURRENT_SEASON, PREV_SEASON
+        )
+    except ImportError:
+        return []
+
+    # Essai classement CdM
+    for season in [CURRENT_SEASON, PREV_SEASON]:
+        try:
+            standings = get_cup_standings(season=season, gender=gender)
+            log.info(f"[Biathlon] standings season={season} gender={gender} "
+                     f"type={type(standings).__name__} len={len(standings) if standings else 0}")
+            if standings and isinstance(standings, list) and len(standings) > 0:
+                first = standings[0]
+                if isinstance(first, dict):
+                    log.info(f"[Biathlon] standings[0] keys={list(first.keys())}")
+                athletes = []
+                for row in standings[:12]:
+                    if not isinstance(row, dict):
+                        continue
+                    ibu_id = (row.get("IBU_ID") or row.get("IBUID") or row.get("Id") or
+                              row.get("ibu_id") or row.get("AthId") or "")
+                    name   = (row.get("Name") or row.get("ShortName") or
+                              row.get("FamilyName") or row.get("name") or "")
+                    nat    = row.get("Nat") or row.get("nat") or row.get("Nation") or ""
+                    if ibu_id and name:
+                        athletes.append({"ibu_id": ibu_id, "name": name, "nat": nat})
+                if len(athletes) >= 2:
+                    return athletes
+        except Exception as e:
+            log.warning(f"[Biathlon] standings {season}/{gender}: {e}")
+
+    # Fallback : résultats récents du même format
+    log.info(f"[Biathlon] Fallback résultats récents format={fmt_code} gender={gender}")
+    try:
+        all_races = get_competitions(CURRENT_SEASON)
+        recent = [
+            r for r in all_races
+            if r.get("format") == fmt_code and r.get("gender") == gender and r.get("race_id")
+        ]
+        recent = sorted(recent, key=lambda x: x.get("date", ""), reverse=True)[:3]
+        seen = {}
+        for race in recent:
+            results = get_results(race["race_id"])
+            for r in results[:10]:
+                ibu_id = r.get("IBU_ID", "")
+                name   = r.get("Name", "")
+                nat    = r.get("Nat", "")
+                rank   = r.get("Rank", 999)
+                if ibu_id and name and ibu_id not in seen:
+                    seen[ibu_id] = {"ibu_id": ibu_id, "name": name, "nat": nat, "rank": rank}
+        athletes = sorted(seen.values(), key=lambda x: x["rank"])[:12]
+        if len(athletes) >= 2:
+            return athletes
+    except Exception as e:
+        log.warning(f"[Biathlon] fallback résultats récents: {e}")
+
+    return []
+
+
 def init_db():
     """Crée les tables biathlon si elles n'existent pas."""
     from core.database import get_connection, is_postgres
@@ -179,7 +247,7 @@ def run(silent=False):
     log.info("[Biathlon] Analyse démarrée (mode prédiction pure)")
 
     try:
-        from sports.biathlon.biathlon_client import get_upcoming_races, get_cup_standings, RACE_FORMATS
+        from sports.biathlon.biathlon_client import get_upcoming_races, RACE_FORMATS
         from sports.biathlon.biathlon_model import predict_h2h
 
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
@@ -210,18 +278,12 @@ def run(silent=False):
                 msg += f" · {fmt_name}"
             msg += "\n"
 
-            # Top athlètes depuis le classement CdM
-            standings = get_cup_standings(gender=gender)
-            top_athletes = []
-            for row in standings[:12]:
-                ibu_id = row.get("IBU_ID") or row.get("Id") or row.get("ibu_id", "")
-                name   = row.get("Name") or row.get("name", "")
-                nat    = row.get("Nat") or row.get("nat", "")
-                if ibu_id and name:
-                    top_athletes.append({"ibu_id": ibu_id, "name": name, "nat": nat})
+            # Top athlètes (classement CdM avec fallback résultats récents)
+            top_athletes = _get_top_athletes(gender, fmt_code)
 
             if len(top_athletes) < 2:
-                msg += "<i>Classement CdM non disponible</i>\n\n"
+                msg += "<i>Données athlètes non disponibles pour cette course</i>\n\n"
+                log.warning(f"[Biathlon] Pas assez d'athlètes pour {description}")
                 continue
 
             # H2H entre le top 1 et les suivants (max 4 duels)
