@@ -47,25 +47,48 @@ def _fd_rate_limit():
 
 def _fd_get(url: str, params: dict = None, retries: int = 3) -> dict:
     """
-    Wrapper GET football-data.org avec rate limit + retry automatique sur 429.
-    Attend 65 secondes (1 minute + marge) avant de réessayer.
+    Wrapper GET football-data.org avec retry intelligent.
+    - 429 : attend 65-125s et reessaie (rate limit temporaire)
+    - 403 : raise immediat sans retry (acces refuse = definitif, plan gratuit limite a 2 saisons)
+    - 404 : raise immediat sans retry
+    - Autres erreurs reseau : retry avec pause 10s
     """
     for attempt in range(retries):
         _fd_rate_limit()
         try:
             resp = requests.get(url, headers=_fd_headers(), params=params or {}, timeout=20)
+
+            if resp.status_code == 403:
+                raise requests.HTTPError(
+                    f"403 Acces refuse (saison archivee ? plan gratuit = 2 saisons recentes max)",
+                    response=resp
+                )
+            if resp.status_code == 404:
+                raise requests.HTTPError(f"404 Not Found: {url}", response=resp)
             if resp.status_code == 429:
-                wait = 65 + attempt * 30  # 65s, 95s, 125s
+                wait = 65 + attempt * 30
                 print(f"[FD] 429 Rate limit — attente {wait}s avant retry {attempt+1}/{retries}...")
                 time.sleep(wait)
                 continue
+
             resp.raise_for_status()
             return resp.json()
+
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", 0) if e.response is not None else 0
+            if status in (403, 404):
+                raise  # pas de retry
+            if attempt == retries - 1:
+                raise
+            print(f"[FD] Erreur HTTP attempt {attempt+1}: {e} — retry dans 10s")
+            time.sleep(10)
+
         except Exception as e:
             if attempt == retries - 1:
                 raise
             print(f"[FD] Erreur attempt {attempt+1}: {e} — retry dans 10s")
             time.sleep(10)
+
     return {}
 
 
@@ -688,19 +711,51 @@ def clear_form_cache():
 
 # Cache global : tous les matchs de la saison par ligue
 # Structure : { league_id: [ {home_id, away_id, home_name, away_name, date, hg, ag}, ... ] }
-_season_matches_cache = {}
+_season_matches_cache = {}  # cache mémoire intra-run
+
+
+def _parse_fd_matches(raw_matches: list, competition: str, season: int) -> list:
+    """Parse les matchs bruts football-data.org en format interne."""
+    result = []
+    for m in raw_matches:
+        ft = m.get("score", {}).get("fullTime", {})
+        hg = ft.get("home")
+        ag = ft.get("away")
+        if hg is None or ag is None:
+            continue
+        home_raw = m.get("homeTeam", {}).get("name", "")
+        away_raw = m.get("awayTeam", {}).get("name", "")
+        result.append({
+            "date":       m.get("utcDate", "")[:10],
+            "home_id":    m.get("homeTeam", {}).get("id"),
+            "away_id":    m.get("awayTeam", {}).get("id"),
+            "home_name":  home_raw,
+            "away_name":  away_raw,
+            "home_norm":  normalize_team_name(home_raw),
+            "away_norm":  normalize_team_name(away_raw),
+            "home_goals": hg,
+            "away_goals": ag,
+        })
+    return result
 
 
 def prefetch_season_matches(league_id: int, seasons: list) -> list:
     """
-    Pré-fetch tous les matchs terminés d'une ligue sur plusieurs saisons.
-    1 appel API par saison — résultat mis en cache global.
-    Utilisé pour calculer H2H localement sans appel supplémentaire.
-    """
-    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
-    cache_key = f"season_{league_id}_{'_'.join(str(s) for s in seasons)}"
+    Retourne les matchs terminés d'une ligue sur plusieurs saisons.
 
-    # Vérifie le cache en premier (avant de checker les env vars)
+    Stratégie cache à 3 niveaux :
+      1. Cache mémoire intra-run (dict Python) → 0 ms
+      2. Cache DB persistant (table h2h_cache, TTL 7 jours) → 0 appel API
+      3. Appel football-data.org → stocké en DB pour les prochains runs
+
+    Plan gratuit FD = 2 saisons récentes max. Les 403 sont ignorés proprement.
+    """
+    from database import get_h2h_cache, set_h2h_cache
+
+    competition = FOOTBALLDATA_LEAGUE_MAP.get(league_id)
+    cache_key   = f"season_{league_id}_{'_'.join(str(s) for s in seasons)}"
+
+    # Niveau 1 : cache mémoire intra-run
     if cache_key in _season_matches_cache:
         return _season_matches_cache[cache_key]
 
@@ -710,32 +765,28 @@ def prefetch_season_matches(league_id: int, seasons: list) -> list:
 
     all_matches = []
     for season in seasons:
+        # Niveau 2 : cache DB
+        cached = get_h2h_cache(league_id, season)
+        if cached is not None:
+            print(f"[prefetch] {competition} saison {season}: {len(cached)} matchs depuis cache DB")
+            all_matches.extend(cached)
+            continue
+
+        # Niveau 3 : appel API football-data.org
         try:
             url    = f"{FOOTBALLDATA_BASE}/competitions/{competition}/matches"
             params = {"season": season, "status": "FINISHED"}
-            data    = _fd_get(url, params)
-            matches = data.get("matches", [])
-
-            for m in matches:
-                ft = m.get("score", {}).get("fullTime", {})
-                hg = ft.get("home")
-                ag = ft.get("away")
-                if hg is None or ag is None:
-                    continue
-                home_raw = m.get("homeTeam", {}).get("name", "")
-                away_raw = m.get("awayTeam", {}).get("name", "")
-                all_matches.append({
-                    "date":       m.get("utcDate", "")[:10],
-                    "home_id":    m.get("homeTeam", {}).get("id"),
-                    "away_id":    m.get("awayTeam", {}).get("id"),
-                    "home_name":  home_raw,
-                    "away_name":  away_raw,
-                    "home_norm":  normalize_team_name(home_raw),
-                    "away_norm":  normalize_team_name(away_raw),
-                    "home_goals": hg,
-                    "away_goals": ag,
-                })
-            print(f"[prefetch] {len(matches)} matchs — {competition} saison {season}")
+            data   = _fd_get(url, params)
+            parsed = _parse_fd_matches(data.get("matches", []), competition, season)
+            set_h2h_cache(league_id, season, parsed)  # stocke en DB
+            all_matches.extend(parsed)
+            print(f"[prefetch] {competition} saison {season}: {len(parsed)} matchs fetchés + mis en cache DB")
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", 0) if e.response is not None else 0
+            if status == 403:
+                print(f"[prefetch] {competition} saison {season}: 403 archive — ignoré (plan gratuit = 2 saisons recentes)")
+            else:
+                print(f"[prefetch] Erreur {competition} saison {season}: {e}")
         except Exception as e:
             print(f"[prefetch] Erreur {competition} saison {season}: {e}")
 
@@ -758,7 +809,7 @@ def get_h2h(league_id: int, home_team: str, away_team: str,
     # Seasons par défaut : 3 saisons pour max d'historique
     if seasons is None:
         current_season = int(os.getenv("SEASON", 2025))
-        seasons = [current_season, current_season - 1, current_season - 2]
+        seasons = [current_season, current_season - 1]  # plan gratuit FD : 2 saisons recentes max
 
     # Pré-fetch si pas encore en cache
     all_matches = prefetch_season_matches(league_id, seasons)

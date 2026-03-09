@@ -460,6 +460,8 @@ def handle_help():
         "🌐 /web      — Lien page web\n"
         "📅 /today    — Paris du jour uniquement\n"
         "📡 /api      — Quota The Odds API\n"
+        "🔥 /h2h      — Statut cache H2H\n"
+        "🔄 /refreshh2h — Forcer refresh H2H\n"
         "📡 /api      — Tokens API restants\n"
         "🗑 /reset    — Effacer tous les paris\n\n"
         f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
@@ -717,6 +719,83 @@ def handle_api():
     )
 
 
+def handle_h2h():
+    """Affiche le statut du cache H2H en DB et propose un refresh."""
+    from database import get_h2h_cache_status
+    rows = get_h2h_cache_status()
+    if not rows:
+        send_message(
+            "📭 <b>Cache H2H vide</b>\n\n"
+            "Les données H2H seront fetchées automatiquement au prochain run.\n"
+            "Ou tapez /refreshh2h pour les charger maintenant."
+        )
+        return
+
+    from collections import defaultdict
+    by_league = defaultdict(list)
+    for r in rows:
+        name = LEAGUE_NAMES.get(r.get("league_id"), str(r.get("league_id")))
+        by_league[name].append(r)
+
+    msg = "🔥 <b>Cache H2H en base de données</b>\n\n"
+    for league_name, entries in sorted(by_league.items()):
+        msg += f"<b>{league_name}</b>\n"
+        for e in sorted(entries, key=lambda x: x.get("season", 0), reverse=True):
+            age = e.get("age_days", "?")
+            count = e.get("match_count", "?")
+            freshness = "✅" if (age or 99) <= 7 else "⚠️ expiré"
+            msg += f"  {e.get('season')} : {count} matchs · {age}j {freshness}\n"
+        msg += "\n"
+
+    msg += "<i>TTL : 7 jours · /refreshh2h pour forcer la mise à jour</i>"
+    send_message(msg)
+
+
+def handle_refresh_h2h():
+    """Force le re-fetch de toutes les données H2H depuis football-data.org."""
+    from database import get_h2h_cache_status
+    import database as db_module
+    import psycopg2, sqlite3
+
+    send_message("🔄 <b>Refresh H2H démarré...</b>\nCela peut prendre quelques minutes (rate limit FD).")
+
+    # Efface le cache DB H2H pour forcer le re-fetch
+    conn = db_module.get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM h2h_cache")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Efface aussi le cache mémoire
+    from api_clients import clear_h2h_cache
+    clear_h2h_cache()
+
+    # Re-fetch pour toutes les ligues configurées
+    from api_clients import prefetch_season_matches, FOOTBALLDATA_LEAGUE_MAP
+    current_season = int(os.getenv("SEASON", 2025))
+    seasons = [current_season, current_season - 1]
+    fetched = 0
+    errors  = 0
+
+    for league_id in LEAGUES:
+        if not FOOTBALLDATA_LEAGUE_MAP.get(league_id):
+            continue
+        try:
+            matches = prefetch_season_matches(league_id, seasons)
+            fetched += 1
+        except Exception as e:
+            errors += 1
+
+    send_message(
+        f"✅ <b>Refresh H2H terminé</b>\n\n"
+        f"✅ {fetched} ligues mises à jour\n"
+        f"{'❌ ' + str(errors) + ' erreurs' if errors else ''}\n"
+        f"<i>Cache valide 7 jours — 0 appel API au prochain run</i>"
+    )
+
+
 COMMANDS = {
     "/help":     handle_help,
     "/status":   handle_status,
@@ -729,7 +808,11 @@ COMMANDS = {
     "/reset":    handle_reset,
     "/today":   handle_today,
     "/api":     handle_api,
+    "/h2h":     handle_h2h,
+    "/refreshh2h": handle_refresh_h2h,
     "/api":     handle_api,
+    "/h2h":     handle_h2h,
+    "/refreshh2h": handle_refresh_h2h,
     "/web":      handle_web,
 }
 

@@ -102,6 +102,16 @@ def init_db():
                     UNIQUE(league_id, season, team_id)
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS h2h_cache (
+                    id          SERIAL PRIMARY KEY,
+                    league_id   INTEGER NOT NULL,
+                    season      INTEGER NOT NULL,
+                    matches_json TEXT NOT NULL,
+                    fetched_at  TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(league_id, season)
+                )
+            """)
         else:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS bets (
@@ -140,8 +150,46 @@ def init_db():
                     UNIQUE(league_id, season, team_id)
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS h2h_cache (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    league_id   INTEGER NOT NULL,
+                    season      INTEGER NOT NULL,
+                    matches_json TEXT NOT NULL,
+                    fetched_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(league_id, season)
+                )
+            """)
 
         conn.commit()
+
+        # ── Migration : table h2h_cache (ajoutée après création initiale)
+        try:
+            if is_postgres():
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS h2h_cache (
+                        id           SERIAL PRIMARY KEY,
+                        league_id    INTEGER NOT NULL,
+                        season       INTEGER NOT NULL,
+                        matches_json TEXT NOT NULL,
+                        fetched_at   TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(league_id, season)
+                    )
+                """)
+            else:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS h2h_cache (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        league_id    INTEGER NOT NULL,
+                        season       INTEGER NOT NULL,
+                        matches_json TEXT NOT NULL,
+                        fetched_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(league_id, season)
+                    )
+                """)
+            conn.commit()
+        except Exception as e:
+            log.warning(f"[DB] Migration h2h_cache ignorée : {e}")
 
         # ── Migration : colonnes bete_noire (ajoutées après création initiale)
         try:
@@ -689,5 +737,117 @@ def get_streak() -> dict:
             else:
                 break
         return {"type": "win" if first == 1 else "loss", "count": count}
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────
+# H2H CACHE — stockage persistant des matchs historiques
+# ─────────────────────────────────────────────
+
+import json as _json
+
+H2H_CACHE_TTL_DAYS = 7  # renouvelle le cache toutes les semaines max
+
+
+def get_h2h_cache(league_id: int, season: int) -> list:
+    """
+    Retourne les matchs stockés pour cette ligue+saison.
+    Retourne None si absent ou expiré (> TTL_DAYS jours).
+    """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        p = ph()
+        if is_postgres():
+            cur.execute(f"""
+                SELECT matches_json, fetched_at,
+                       NOW() - fetched_at AS age
+                FROM h2h_cache
+                WHERE league_id = {p} AND season = {p}
+            """, (league_id, season))
+        else:
+            cur.execute(f"""
+                SELECT matches_json, fetched_at,
+                       CAST((julianday('now') - julianday(fetched_at)) AS INTEGER) AS age_days
+                FROM h2h_cache
+                WHERE league_id = {p} AND season = {p}
+            """, (league_id, season))
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        matches_json, fetched_at, age = row[0], row[1], row[2]
+
+        # Vérifie l'âge
+        if is_postgres():
+            age_days = age.days if hasattr(age, 'days') else H2H_CACHE_TTL_DAYS + 1
+        else:
+            age_days = int(age) if age is not None else H2H_CACHE_TTL_DAYS + 1
+
+        if age_days > H2H_CACHE_TTL_DAYS:
+            return None  # expiré → refetch
+
+        return _json.loads(matches_json)
+    except Exception as e:
+        log.warning(f"[DB] get_h2h_cache error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def set_h2h_cache(league_id: int, season: int, matches: list):
+    """Stocke ou met à jour les matchs H2H pour cette ligue+saison."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        p = ph()
+        data = _json.dumps(matches)
+        if is_postgres():
+            cur.execute(f"""
+                INSERT INTO h2h_cache (league_id, season, matches_json, fetched_at)
+                VALUES ({p}, {p}, {p}, NOW())
+                ON CONFLICT (league_id, season)
+                DO UPDATE SET matches_json = EXCLUDED.matches_json, fetched_at = NOW()
+            """, (league_id, season, data))
+        else:
+            cur.execute(f"""
+                INSERT OR REPLACE INTO h2h_cache (league_id, season, matches_json, fetched_at)
+                VALUES ({p}, {p}, {p}, CURRENT_TIMESTAMP)
+            """, (league_id, season, data))
+        conn.commit()
+    except Exception as e:
+        log.warning(f"[DB] set_h2h_cache error: {e}")
+    finally:
+        conn.close()
+
+
+def get_h2h_cache_status() -> list:
+    """Retourne le statut du cache H2H pour l'affichage (config page)."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if is_postgres():
+            cur.execute("""
+                SELECT league_id, season,
+                       jsonb_array_length(matches_json::jsonb) as match_count,
+                       fetched_at,
+                       EXTRACT(DAY FROM NOW() - fetched_at)::INTEGER as age_days
+                FROM h2h_cache
+                ORDER BY league_id, season DESC
+            """)
+        else:
+            cur.execute("""
+                SELECT league_id, season,
+                       json_array_length(matches_json) as match_count,
+                       fetched_at,
+                       CAST((julianday('now') - julianday(fetched_at)) AS INTEGER) as age_days
+                FROM h2h_cache
+                ORDER BY league_id, season DESC
+            """)
+        return rows_to_dicts(cur, cur.fetchall())
+    except Exception as e:
+        log.warning(f"[DB] get_h2h_cache_status error: {e}")
+        return []
     finally:
         conn.close()
