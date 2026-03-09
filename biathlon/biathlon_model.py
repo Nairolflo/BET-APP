@@ -22,7 +22,7 @@ import math
 import random
 import logging
 from typing import Optional
-from biathlon_client import (
+from biathlon.biathlon_client import (
     get_athlete_results, get_results, get_analytic_results,
     parse_shooting_string, time_to_seconds,
     CURRENT_SEASON, PREV_SEASON
@@ -342,7 +342,7 @@ def predict_podium(race_id: str, race_format: str) -> list:
     """
     # Récupère les partants depuis les derniers résultats de cette course
     # (si la course n'a pas encore eu lieu, on prend la start list si disponible)
-    from biathlon_client import get_results
+    from biathlon.biathlon_client import get_results
     results = get_results(race_id)
     if not results:
         log.warning(f"[Podium] Aucun résultat pour {race_id}")

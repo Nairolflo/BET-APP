@@ -17,7 +17,7 @@ import time
 import logging
 import requests
 from typing import Optional
-from biathlon_model import detect_h2h_value, VALUE_THRESHOLD
+from biathlon.biathlon_model import detect_h2h_value, VALUE_THRESHOLD
 
 log = logging.getLogger(__name__)
 
