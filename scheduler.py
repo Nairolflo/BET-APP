@@ -26,7 +26,7 @@ from database import (
     delete_today_pending_bets, update_bet_result, get_pending_bets, reset_all_bets,
 )
 from api_clients import (
-    get_odds_quota,
+    get_odds_quota, odds_quota_ok, clear_odds_cache,
     get_fixtures, get_odds, get_team_standings,
     get_fixtures_results_batch, get_all_results_today,
     normalize_team_name, get_h2h, clear_h2h_cache,
@@ -148,6 +148,19 @@ def run_value_bet_engine(silent=False):
         return
 
     worker_state["running"] = True
+
+    # Vérif quota avant de démarrer (sauf run forcé via /run)
+    if not silent:  # silent=True = run normal schedulé
+        if not odds_quota_ok(required=len(LEAGUES)):
+            rem = get_odds_quota().get("remaining", "?")
+            send_message(
+                f"⚠️ <b>Run annulé — quota insuffisant</b>\n\n"
+                f"📡 Restantes : <b>{rem}</b> / seuil sécurité : {30}\n"
+                f"<i>Utilisez /run pour forcer malgré tout.</i>"
+            )
+            worker_state["running"] = False
+            return
+
     clear_h2h_cache()
     clear_form_cache()
     delete_today_pending_bets()
@@ -448,23 +461,22 @@ def check_results(silent=False):
 
 def handle_help():
     send_message(
-        "🤖 <b>ValueBet Bot — Commandes</b>\n\n"
-        "❓ /help     — Ce message\n"
-        "📡 /status   — État du worker\n"
-        "⚽ /bets     — Tous les paris en base\n"
-        "📊 /stats    — Win rate + ROI par ligue\n"
-        "📈 /pourcent — Taux de réussite rapide\n"
-        "⚡ /run      — Lancer une analyse\n"
-        "🔄 /refresh  — Refresh stats équipes\n"
-        "🏆 /results  — Vérifier les résultats\n"
-        "🌐 /web      — Lien page web\n"
-        "📅 /today    — Paris du jour uniquement\n"
-        "📡 /api      — Quota The Odds API\n"
-        "🔥 /h2h      — Statut cache H2H\n"
+        "⚽ <b>Le Loup de Wall Bet — FOOT</b>\n\n"
+        "❓ /help       — Ce message\n"
+        "📡 /status     — État du worker\n"
+        "⚽ /bets       — Paris en attente\n"
+        "📊 /stats      — Win rate + ROI\n"
+        "📈 /pourcent   — Taux de réussite rapide\n"
+        "⚡ /run        — Lancer une analyse\n"
+        "🔄 /refresh    — Refresh stats équipes\n"
+        "🏆 /results    — Vérifier les résultats\n"
+        "📅 /today      — Paris du jour\n"
+        "📡 /api        — Quota Odds API\n"
+        "🔥 /h2h        — Cache H2H\n"
         "🔄 /refreshh2h — Forcer refresh H2H\n"
-        "📡 /api      — Tokens API restants\n"
-        "🗑 /reset    — Effacer tous les paris\n\n"
-        f"<i>Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC chaque jour</i>"
+        "🗑 /reset      — Effacer tous les paris\n"
+        "🌐 /web        — Lien page web\n\n"
+        f"<i>⏰ Analyse auto : {SCHEDULER_HOUR:02d}h00 UTC · /helpbiathlon pour le biathlon</i>"
     )
 
 
@@ -796,24 +808,39 @@ def handle_refresh_h2h():
     )
 
 
+BIATHLON_WORKER_URL = os.getenv("BIATHLON_WORKER_URL", "")  # ex: http://biathlon-worker.railway.internal:5001
+
+def dispatch_biathlon(cmd: str):
+    """Dispatch une commande /biathlon* vers le worker biathlon via HTTP interne."""
+    if not BIATHLON_WORKER_URL:
+        send_message("⚠️ Worker biathlon non configuré (BIATHLON_WORKER_URL manquant)")
+        return
+    try:
+        import requests as req
+        req.get(f"{BIATHLON_WORKER_URL}", params={"cmd": cmd}, timeout=5)
+    except Exception as e:
+        send_message(f"⚠️ Worker biathlon injoignable : {e}")
+
 COMMANDS = {
-    "/help":     handle_help,
-    "/status":   handle_status,
-    "/bets":     handle_bets,
-    "/stats":    handle_stats,
-    "/pourcent": handle_pourcent,
-    "/run":      handle_run,
-    "/refresh":  handle_refresh,
-    "/results":  handle_results,
-    "/reset":    handle_reset,
-    "/today":   handle_today,
-    "/api":     handle_api,
-    "/h2h":     handle_h2h,
-    "/refreshh2h": handle_refresh_h2h,
-    "/api":     handle_api,
-    "/h2h":     handle_h2h,
-    "/refreshh2h": handle_refresh_h2h,
-    "/web":      handle_web,
+    "/help":          handle_help,
+    "/status":        handle_status,
+    "/bets":          handle_bets,
+    "/stats":         handle_stats,
+    "/pourcent":      handle_pourcent,
+    "/run":           handle_run,
+    "/refresh":       handle_refresh,
+    "/results":       handle_results,
+    "/reset":         handle_reset,
+    "/today":         handle_today,
+    "/api":           handle_api,
+    "/h2h":           handle_h2h,
+    "/refreshh2h":    handle_refresh_h2h,
+    "/web":           handle_web,
+    # Biathlon — dispatchés vers le worker dédié
+    "/biathlon":         lambda: dispatch_biathlon("/biathlon"),
+    "/biathlonrun":      lambda: dispatch_biathlon("/biathlonrun"),
+    "/biathlonresults":  lambda: dispatch_biathlon("/biathlonresults"),
+    "/biathlonstats":    lambda: dispatch_biathlon("/biathlonstats"),
 }
 
 
@@ -867,6 +894,8 @@ def telegram_polling():
                     except Exception as e:
                         log.error(f"  Erreur {text}: {e}")
                         send_message(f"❌ Erreur {text} : {e}")
+                elif text.startswith("/biathlon"):
+                    pass  # commandes biathlon ignorées par le bot foot
                 elif text.startswith("/"):
                     handle_help()
 
@@ -909,8 +938,9 @@ def run_scheduler():
     log.info(f"⏰ Scheduler : refresh 06h, analyse {SCHEDULER_HOUR:02d}h, résultats 23h UTC")
 
     send_message(
-        f"✅ <b>ValueBet Bot démarré</b> — {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
-        f"💬 /help pour les commandes"
+        f"🐺 <b>Le Loup de Wall Bet</b> — {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
+        f"⚽ Worker Foot <b>opérationnel</b>\n"
+        f"💬 /help · /helpbiathlon pour le biathlon"
     )
 
     try:

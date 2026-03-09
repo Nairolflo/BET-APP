@@ -610,43 +610,35 @@ def handle_biathlon_stats():
 
 # ─── Polling Telegram ────────────────────────
 
-def start_telegram_polling():
-    """Polling des commandes Telegram (thread séparé)."""
-    import requests as req
-    offset = None
-    log.info("📱 Telegram polling démarré")
+def start_command_server():
+    """
+    Serveur HTTP léger pour recevoir les commandes depuis le worker foot.
+    Le foot dispatch les commandes /biathlon* ici via HTTP interne Railway.
+    Port : BIATHLON_PORT (défaut 5001)
+    """
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import urllib.parse
 
-    while True:
-        try:
-            params = {"timeout": 30, "allowed_updates": ["message"]}
-            if offset:
-                params["offset"] = offset
+    port = int(os.getenv("BIATHLON_PORT", 5001))
 
-            resp = req.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-                params=params, timeout=35
-            )
-            data = resp.json()
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            cmd    = urllib.parse.parse_qs(parsed.query).get("cmd", [""])[0]
+            if cmd in COMMANDS:
+                log.info(f"📱 Commande reçue via HTTP : {cmd}")
+                threading.Thread(target=COMMANDS[cmd], daemon=True).start()
+                self.send_response(200)
+            else:
+                self.send_response(404)
+            self.end_headers()
 
-            for update in data.get("result", []):
-                offset = update["update_id"] + 1
-                msg    = update.get("message", {})
-                text   = msg.get("text", "").strip().split()[0].lower()
-                chat   = str(msg.get("chat", {}).get("id", ""))
+        def log_message(self, format, *args):
+            pass  # silence les logs HTTP
 
-                if chat != TELEGRAM_CHAT_ID:
-                    continue
-
-                if text in COMMANDS:
-                    log.info(f"📱 Commande reçue : {text}")
-                    try:
-                        COMMANDS[text]()
-                    except Exception as e:
-                        log.error(f"Commande {text}: {e}")
-
-        except Exception as e:
-            log.warning(f"[Telegram polling] {e}")
-            import time; time.sleep(5)
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    log.info(f"🌐 Command server biathlon démarré sur port {port}")
+    server.serve_forever()
 
 
 # ─── Main ─────────────────────────────────────
@@ -657,6 +649,15 @@ COMMANDS.update({
     "/biathlonrun":     lambda: threading.Thread(target=run_biathlon_full_analysis, kwargs={"silent": False}, daemon=True).start(),
     "/biathlonresults": lambda: threading.Thread(target=check_biathlon_results, kwargs={"silent": False}, daemon=True).start(),
     "/biathlonstats":   lambda: threading.Thread(target=handle_biathlon_stats, daemon=True).start(),
+    "/helpbiathlon":    lambda: send_message(
+        "🎿 <b>Le Loup de Wall Bet — BIATHLON</b>\n\n"
+        "/biathlon        — Statut + prochaines courses\n"
+        "/biathlonrun     — Lancer une analyse\n"
+        "/biathlonresults — Vérifier les résultats\n"
+        "/biathlonstats   — ROI + win rate\n"
+        "/helpbiathlon    — Ce message\n\n"
+        f"<i>⏰ Analyse auto : {ANALYSIS_HOUR:02d}h30 UTC · /help pour le foot</i>"
+    ),
 })
 
 if __name__ == "__main__":
@@ -667,10 +668,9 @@ if __name__ == "__main__":
     # Init DB
     init_biathlon_db()
 
-    # Démarrage Telegram polling en thread
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        tg_thread = threading.Thread(target=start_telegram_polling, daemon=True)
-        tg_thread.start()
+    # Serveur de commandes internes (reçoit dispatch depuis worker foot)
+    cmd_thread = threading.Thread(target=start_command_server, daemon=True)
+    cmd_thread.start()
 
     # Scheduler
     scheduler = BlockingScheduler(timezone="UTC")
@@ -691,10 +691,10 @@ if __name__ == "__main__":
 
     # Message de démarrage
     send_message(
-        f"🎿 <b>Biathlon Worker démarré</b> — "
-        f"{datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
-        f"📅 Analyse : {ANALYSIS_HOUR:02d}h30 · Résultats : {RESULTS_HOUR:02d}h00\n"
-        f"💬 /biathlon pour le statut"
+        f"🐺 <b>Le Loup de Wall Bet</b> — {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
+        f"🎿 Worker Biathlon <b>opérationnel</b>\n"
+        f"⏰ Analyse {ANALYSIS_HOUR:02d}h30 · Résultats {RESULTS_HOUR:02d}h00\n"
+        f"💬 /helpbiathlon pour les commandes"
     )
 
     log.info(f"⏰ Analyse : {ANALYSIS_HOUR:02d}h30 UTC · Résultats : {RESULTS_HOUR:02d}h00 UTC")

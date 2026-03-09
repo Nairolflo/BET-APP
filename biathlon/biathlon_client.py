@@ -5,11 +5,12 @@ Client pour l'API non officielle biathlonresults.com (IBU officiel).
 Toutes les données sont publiques et gratuites.
 
 Endpoints utilisés :
-  GET https://biathlonresults.com/api/svc/GetCompetitions?SeasonId=...
-  GET https://biathlonresults.com/api/svc/GetResults?RaceId=...
-  GET https://biathlonresults.com/api/svc/GetCupResults?IBU_ID=...&Rnk=1
-  GET https://biathlonresults.com/api/svc/GetAthResults?IBU_ID=...
-  GET https://biathlonresults.com/api/svc/GetAnalyticResults?RaceId=...
+  GET http://biathlonresults.com/modules/sportapi/api/Events?SeasonId=...
+  GET http://biathlonresults.com/modules/sportapi/api/Competitions?EventId=...
+  GET http://biathlonresults.com/modules/sportapi/api/Results?RaceId=...
+  GET http://biathlonresults.com/modules/sportapi/api/CupResults?IBU_ID=...
+  GET http://biathlonresults.com/modules/sportapi/api/AthResults?IBU_ID=...
+  GET http://biathlonresults.com/modules/sportapi/api/AnalyticResults?RaceId=...
 """
 
 import os
@@ -22,7 +23,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-IBU_BASE = "https://biathlonresults.com/api/svc"
+IBU_BASE = "http://biathlonresults.com/modules/sportapi/api"
 
 # Cache mémoire simple (TTL 1h pour les données live, 24h pour l'historique)
 _cache: dict = {}
@@ -69,34 +70,39 @@ def _get(endpoint: str, params: dict = None, ttl: int = 3600) -> Optional[dict |
 
 def get_competitions(season: str = CURRENT_SEASON) -> list:
     """
-    Retourne toutes les compétitions d'une saison.
-    Chaque compétition contient les épreuves (races) avec leur RaceId.
+    Retourne toutes les courses d'une saison IBU World Cup.
+    Appelle Events → puis Competitions pour chaque event.
 
     Structure retournée :
     [
       {
-        "RaceId": "BT2526SWRLCP__SWSP01",
-        "Description": "Sprint Women",
+        "RaceId": "BT2526SWRLCP01SWSP",
+        "ShortDescription": "Sprint Women",
         "StartTime": "2025-11-28T...",
         "Location": "Kontiolahti",
         "Status": "Official",
-        "RaceTypeId": "SR",
+        "RaceTypeId": "SP",
       }, ...
     ]
     """
-    data = _get("GetCompetitions", {"SeasonId": season}, ttl=3600)
-    if not data:
+    # Niveau 1 : liste des events (étapes CdM)
+    events = _get("Events", {"SeasonId": season, "Level": "BMTIBT"}, ttl=3600)
+    if not events:
         return []
 
     races = []
-    for comp in (data if isinstance(data, list) else data.get("Competitions", [])):
-        # Certains endpoints retournent competitions + races imbriquées
-        if "Races" in comp:
-            for r in comp["Races"]:
-                r["Location"] = comp.get("Location", "")
-                races.append(r)
-        else:
-            races.append(comp)
+    for event in (events if isinstance(events, list) else []):
+        event_id  = event.get("EventId", "")
+        location  = event.get("ShortDescription", event.get("Organizer", ""))
+        if not event_id:
+            continue
+        # Niveau 2 : courses dans cet event
+        comps = _get("Competitions", {"EventId": event_id}, ttl=3600)
+        if not comps:
+            continue
+        for c in (comps if isinstance(comps, list) else []):
+            c["Location"] = location
+            races.append(c)
     return races
 
 
@@ -117,7 +123,7 @@ def get_results(race_id: str) -> list:
       "PenaltyLoops": 2,
     }
     """
-    data = _get("GetResults", {"RaceId": race_id}, ttl=86400)  # 24h car résultats immuables
+    data = _get("Results", {"RaceId": race_id}, ttl=86400)  # 24h car résultats immuables
     if not data:
         return []
     return data if isinstance(data, list) else data.get("Results", [])
@@ -131,10 +137,10 @@ def get_athlete_results(ibu_id: str, season: str = None) -> list:
     params = {"IBU_ID": ibu_id}
     if season:
         params["SeasonId"] = season
-    data = _get("GetAthResults", params, ttl=3600)
+    data = _get("AthResults", params, ttl=3600)
     if not data:
         return []
-    return data if isinstance(data, list) else data.get("Results", [])
+    return (data if isinstance(data, list) else data.get("Results", [])) if data else []
 
 
 def get_analytic_results(race_id: str) -> list:
@@ -151,7 +157,7 @@ def get_analytic_results(race_id: str) -> list:
       "CourseTime": "...",
     }
     """
-    data = _get("GetAnalyticResults", {"RaceId": race_id}, ttl=86400)
+    data = _get("AnalyticResults", {"RaceId": race_id}, ttl=86400)
     if not data:
         return []
     return data if isinstance(data, list) else data.get("Results", [])
@@ -166,7 +172,7 @@ def get_cup_standings(season: str = CURRENT_SEASON, gender: str = "W") -> list:
     """
     suffix = "SW" if gender == "W" else "SM"
     ibu_id = f"BT{season}SWRLCP__{suffix}TS"  # TS = Total Score
-    data = _get("GetCupResults", {"IBU_ID": ibu_id, "Rnk": 1}, ttl=3600)
+    data = _get("CupResults", {"CupId": ibu_id, "Rnk": 1}, ttl=3600)
     if not data:
         return []
     return data if isinstance(data, list) else data.get("Rows", [])
@@ -190,7 +196,8 @@ def get_upcoming_races(days_ahead: int = 10) -> list:
             start_date = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).date()
         except ValueError:
             continue
-        if today <= start_date <= cutoff and r.get("Status", "") != "Official":
+        status = str(r.get("Status", "0"))
+        if today <= start_date <= cutoff and status != "1":  # "1" = official/terminé
             upcoming.append({
                 "race_id":    r.get("RaceId", ""),
                 "description": r.get("Description", ""),
@@ -198,7 +205,7 @@ def get_upcoming_races(days_ahead: int = 10) -> list:
                 "date":       start_date.isoformat(),
                 "format":     r.get("RaceTypeId", ""),
                 "format_name": RACE_FORMATS.get(r.get("RaceTypeId", ""), r.get("RaceTypeId", "")),
-                "gender":     "W" if "SW" in r.get("RaceId", "") or "Women" in r.get("Description", "") else "M",
+                "gender":     "W" if "SW" in r.get("RaceId", "") else "M",
             })
     return sorted(upcoming, key=lambda x: x["date"])
 
