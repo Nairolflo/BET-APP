@@ -14,6 +14,7 @@ from database import (
 )
 
 app = Flask(__name__)
+app.jinja_env.filters['enumerate'] = enumerate
 
 @app.before_request
 def setup():
