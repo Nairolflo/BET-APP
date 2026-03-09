@@ -1,5 +1,7 @@
 """
 sports/biathlon/jobs.py — Jobs biathlon (analyse, résultats)
+Mode prédiction pure : modèle IBU uniquement, sans cotes externes.
+The Odds API ne couvre pas le biathlon → pas de value bet, juste les probas.
 """
 import os
 import logging
@@ -7,10 +9,9 @@ from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-BIATHLON_VALUE_THRESHOLD = float(os.getenv("BIATHLON_VALUE_THRESHOLD", 0.05))
-BIATHLON_DAYS_AHEAD      = int(os.getenv("BIATHLON_DAYS_AHEAD", 3))
-ANALYSIS_HOUR            = int(os.getenv("BIATHLON_ANALYSIS_HOUR", 7))
-RESULTS_HOUR             = int(os.getenv("BIATHLON_RESULTS_HOUR", 22))
+BIATHLON_DAYS_AHEAD = int(os.getenv("BIATHLON_DAYS_AHEAD", 3))
+ANALYSIS_HOUR       = int(os.getenv("BIATHLON_ANALYSIS_HOUR", 7))
+RESULTS_HOUR        = int(os.getenv("BIATHLON_RESULTS_HOUR", 22))
 
 state = {
     "last_run":     None,
@@ -36,12 +37,12 @@ def init_db():
                     bet_type     TEXT,
                     pick         TEXT,
                     opponent     TEXT,
-                    odd          REAL,
-                    bookmaker    TEXT,
+                    odd          REAL DEFAULT 0,
+                    bookmaker    TEXT DEFAULT 'IBU Model',
                     prob_model   REAL,
-                    prob_implied REAL,
-                    value_pct    REAL,
-                    kelly        REAL,
+                    prob_implied REAL DEFAULT 0,
+                    value_pct    REAL DEFAULT 0,
+                    kelly        REAL DEFAULT 0,
                     result       INTEGER DEFAULT -1,
                     created_at   TIMESTAMP DEFAULT NOW(),
                     resolved_at  TIMESTAMP
@@ -58,12 +59,12 @@ def init_db():
                     bet_type     TEXT,
                     pick         TEXT,
                     opponent     TEXT,
-                    odd          REAL,
-                    bookmaker    TEXT,
+                    odd          REAL DEFAULT 0,
+                    bookmaker    TEXT DEFAULT 'IBU Model',
                     prob_model   REAL,
-                    prob_implied REAL,
-                    value_pct    REAL,
-                    kelly        REAL,
+                    prob_implied REAL DEFAULT 0,
+                    value_pct    REAL DEFAULT 0,
+                    kelly        REAL DEFAULT 0,
                     result       INTEGER DEFAULT -1,
                     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     resolved_at  TIMESTAMP
@@ -75,17 +76,18 @@ def init_db():
         conn.close()
 
 
-def save_bet(bet: dict) -> int:
+def save_prediction(pred: dict) -> int:
+    """Sauvegarde une prédiction H2H en DB (sans cotes)."""
     from database import get_connection, is_postgres, ph
     conn = get_connection()
     try:
-        cur  = conn.cursor()
-        p    = ph()
+        cur = conn.cursor()
+        p   = ph()
         # Anti-doublon
         cur.execute(f"""
             SELECT id FROM biathlon_bets
             WHERE race_id = {p} AND bet_type = {p} AND pick = {p}
-        """, (bet.get("race_id"), bet.get("bet_type"), bet.get("pick")))
+        """, (pred.get("race_id"), pred.get("bet_type"), pred.get("pick")))
         existing = cur.fetchone()
         if existing:
             return existing[0]
@@ -99,11 +101,10 @@ def save_bet(bet: dict) -> int:
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (
-                bet.get("race_id"), bet.get("race_name"), bet.get("race_date"),
-                bet.get("race_format"), bet.get("bet_type"), bet.get("pick"),
-                bet.get("opponent"), bet.get("odd"), bet.get("bookmaker"),
-                bet.get("prob_model"), bet.get("prob_implied"),
-                bet.get("value_pct"), bet.get("kelly"),
+                pred.get("race_id"), pred.get("race_name"), pred.get("race_date"),
+                pred.get("race_format"), pred.get("bet_type"), pred.get("pick"),
+                pred.get("opponent"), 0, "IBU Model",
+                pred.get("prob_model", 0), 0, 0, 0,
             ))
             return cur.fetchone()[0]
         else:
@@ -114,11 +115,10 @@ def save_bet(bet: dict) -> int:
                      value_pct, kelly)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
-                bet.get("race_id"), bet.get("race_name"), bet.get("race_date"),
-                bet.get("race_format"), bet.get("bet_type"), bet.get("pick"),
-                bet.get("opponent"), bet.get("odd"), bet.get("bookmaker"),
-                bet.get("prob_model"), bet.get("prob_implied"),
-                bet.get("value_pct"), bet.get("kelly"),
+                pred.get("race_id"), pred.get("race_name"), pred.get("race_date"),
+                pred.get("race_format"), pred.get("bet_type"), pred.get("pick"),
+                pred.get("opponent"), 0, "IBU Model",
+                pred.get("prob_model", 0), 0, 0, 0,
             ))
             return cur.lastrowid
     finally:
@@ -141,12 +141,12 @@ def get_pending_bets() -> list:
 
 
 def update_result(bet_id: int, result: int):
-    from database import get_connection, ph
+    from database import get_connection, ph, is_postgres
     conn = get_connection()
     try:
         cur = conn.cursor()
         p   = ph()
-        if hasattr(conn, 'autocommit'):  # postgres
+        if is_postgres():
             cur.execute(f"""
                 UPDATE biathlon_bets
                 SET result = {p}, resolved_at = NOW()
@@ -164,7 +164,11 @@ def update_result(bet_id: int, result: int):
 
 
 def run(silent=False):
-    """Analyse principale biathlon : courses → cotes → value bets → DB → Telegram."""
+    """
+    Analyse principale biathlon — mode prédiction pure.
+    Calcule les probas H2H via le modèle IBU et les envoie sur Telegram.
+    Pas de comparaison avec des cotes externes (The Odds API ne couvre pas le biathlon).
+    """
     from core.telegram import send_message
 
     if state["running"]:
@@ -172,12 +176,10 @@ def run(silent=False):
         return
 
     state["running"] = True
-    log.info("[Biathlon] Analyse démarrée")
+    log.info("[Biathlon] Analyse démarrée (mode prédiction pure)")
 
     try:
-        # Import des modules biathlon existants
         from biathlon.biathlon_client import get_upcoming_races
-        from biathlon.biathlon_odds   import get_biathlon_events, parse_h2h_odds, find_value_bets
         from biathlon.biathlon_model  import predict_h2h
 
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
@@ -190,42 +192,69 @@ def run(silent=False):
         if not silent:
             send_message(
                 f"🎿 <b>Analyse biathlon démarrée</b>\n"
-                f"{len(races)} course(s) trouvée(s)"
+                f"{len(races)} course(s) trouvée(s) — calcul des probabilités..."
             )
 
-        # Cotes
-        events   = get_biathlon_events()
-        h2h_mkt  = parse_h2h_odds(events)
-        value_bets = find_value_bets(h2h_mkt, {}, threshold=BIATHLON_VALUE_THRESHOLD)
+        saved    = 0
+        msg_body = ""
 
-        saved = 0
-        msg_bets = ""
-        for vb in value_bets:
+        for race in races:
+            race_id   = race.get("RaceId", "")
+            race_name = race.get("ShortDescription", race.get("Description", "Course"))
+            race_date = race.get("StartTime", "")[:10]
+            race_fmt  = race.get("RaceTypeId", "")
+
             try:
-                race = next((r for r in races if r.get("RaceId") == vb.get("race_id")), {})
-                bet_id = save_bet({
-                    "race_id":     vb.get("race_id", ""),
-                    "race_name":   race.get("ShortDescription", "Course"),
-                    "race_date":   race.get("StartTime", "")[:10],
-                    "race_format": race.get("RaceTypeId", ""),
-                    "bet_type":    "H2H",
-                    "pick":        vb.get("athlete_a", ""),
-                    "opponent":    vb.get("athlete_b", ""),
-                    "odd":         vb.get("odd", 0),
-                    "bookmaker":   vb.get("bookmaker", ""),
-                    "prob_model":  vb.get("prob_model", 0),
-                    "prob_implied": vb.get("prob_implied", 0),
-                    "value_pct":   vb.get("value_pct", 0),
-                    "kelly":       vb.get("kelly", 0),
-                })
-                saved += 1
-                msg_bets += (
-                    f"  <b>{vb.get('athlete_a')} vs {vb.get('athlete_b')}</b>\n"
-                    f"  @ <b>{vb.get('odd')}</b> · +{vb.get('value_pct',0)*100:.1f}% · "
-                    f"Modèle {vb.get('prob_model',0)*100:.0f}%\n\n"
-                )
+                # predict_h2h retourne une liste de duels (athleteA, athleteB, prob_a, prob_b)
+                duels = predict_h2h(race)
+                if not duels:
+                    continue
+
+                # On garde les duels où le modèle est confiant (prob > 60%)
+                top_duels = [d for d in duels if d.get("prob_a", 0) >= 0.60]
+                if not top_duels:
+                    top_duels = sorted(duels, key=lambda x: abs(x.get("prob_a", 0.5) - 0.5), reverse=True)[:3]
+
+                msg_body += f"\n📅 <b>{race_name}</b> ({race_date})\n"
+
+                for duel in top_duels[:5]:
+                    athlete_a = duel.get("athlete_a", "?")
+                    athlete_b = duel.get("athlete_b", "?")
+                    prob_a    = duel.get("prob_a", 0)
+                    prob_b    = 1 - prob_a
+
+                    # Qui est favori ?
+                    if prob_a >= 0.5:
+                        fav, und = athlete_a, athlete_b
+                        prob_fav = prob_a
+                    else:
+                        fav, und = athlete_b, athlete_a
+                        prob_fav = prob_b
+
+                    msg_body += (
+                        f"  • <b>{fav}</b> vs {und} "
+                        f"— {prob_fav*100:.0f}% favori\n"
+                    )
+
+                    # Sauvegarde en DB
+                    try:
+                        save_prediction({
+                            "race_id":     race_id,
+                            "race_name":   race_name,
+                            "race_date":   race_date,
+                            "race_format": race_fmt,
+                            "bet_type":    "H2H",
+                            "pick":        fav,
+                            "opponent":    und,
+                            "prob_model":  prob_fav,
+                        })
+                        saved += 1
+                    except Exception as e:
+                        log.error(f"[Biathlon] save_prediction: {e}")
+
             except Exception as e:
-                log.error(f"[Biathlon] save_bet: {e}")
+                log.warning(f"[Biathlon] predict_h2h {race_id}: {e}")
+                continue
 
         state["last_run"] = datetime.now(timezone.utc)
         state["running"]  = False
@@ -233,12 +262,13 @@ def run(silent=False):
         if not silent:
             if saved > 0:
                 send_message(
-                    f"🎯 <b>Biathlon — {saved} value bet(s)</b>\n\n"
-                    + msg_bets +
-                    "⚠️ <i>Pariez de façon responsable.</i>"
+                    f"🎯 <b>Biathlon — {saved} prédiction(s)</b>\n"
+                    f"<i>Mode prédiction pure (pas de cotes disponibles)</i>\n"
+                    + msg_body +
+                    "\n⚠️ <i>Ces probabilités sont indicatives. Trouvez vos propres cotes chez Unibet/Betclic.</i>"
                 )
             else:
-                send_message("🎿 <b>Biathlon</b> : Aucun value bet trouvé.")
+                send_message("🎿 <b>Biathlon</b> : Aucune prédiction générée.")
 
     except Exception as e:
         state["running"] = False
@@ -248,7 +278,7 @@ def run(silent=False):
 
 
 def check_results(silent=False):
-    """Vérifie les résultats des bets biathlon en attente."""
+    """Vérifie les résultats des prédictions biathlon en attente."""
     from core.telegram import send_message
 
     pending = get_pending_bets()
@@ -258,7 +288,7 @@ def check_results(silent=False):
         return
 
     try:
-        from biathlon.biathlon_client import get_competitions, get_results
+        from biathlon.biathlon_client import get_results
     except ImportError as e:
         log.error(f"[Biathlon] Import error: {e}")
         return
@@ -270,7 +300,6 @@ def check_results(silent=False):
             results = get_results(bet["race_id"])
             if not results:
                 continue
-            # Cherche la position du pick dans les résultats
             pick_pos = next(
                 (r.get("Rank") for r in results
                  if bet["pick"].lower() in r.get("Name", "").lower()),
@@ -299,11 +328,11 @@ def check_results(silent=False):
 
     msg = "🎿 <b>Résultats biathlon</b>\n\n"
     if won:
-        msg += f"✅ <b>Gagnés ({len(won)})</b>\n"
+        msg += f"✅ <b>Corrects ({len(won)})</b>\n"
         for b in won:
             msg += f"  • {b['pick']} vs {b.get('opponent','')} · {b['race_name']}\n"
     if lost:
-        msg += f"\n❌ <b>Perdus ({len(lost)})</b>\n"
+        msg += f"\n❌ <b>Incorrects ({len(lost)})</b>\n"
         for b in lost:
             msg += f"  • {b['pick']} vs {b.get('opponent','')} · {b['race_name']}\n"
 

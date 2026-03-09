@@ -2,7 +2,7 @@
 app.py - Flask web interface ValueBet Bot
 """
 import os
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, redirect
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -14,7 +14,6 @@ from database import (
 )
 
 app = Flask(__name__)
-app.jinja_env.filters['enumerate'] = enumerate
 
 @app.before_request
 def setup():
