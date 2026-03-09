@@ -27,14 +27,14 @@ def send_message(text: str, parse_mode: str = "HTML") -> bool:
         return False
 
 
-def send_daily_summary(value_bets: list):
+def send_daily_summary(value_bets: list, extra: str = ""):
     """
     Envoie un résumé groupé par catégorie.
     Envoie une alerte séparée pour les bête noire.
     value_bets : list of (bet_dict, match_info_dict)
     """
     if not value_bets:
-        send_message("📭 <b>Aucun nouveau value bet.</b> La chasse continue ⚽")
+        send_message("📭 <b>Aucun nouveau value bet.</b> La chasse continue ⚽" + extra)
         return
 
     top_count = int(os.getenv("TOP_BETS_COUNT", 10))
@@ -71,6 +71,8 @@ def send_daily_summary(value_bets: list):
         for b, m in bn_bets: msg += fmt(b, m)
 
     msg += "\n⚠️ <i>Pariez de façon responsable.</i>"
+    if extra:
+        msg += extra
     send_message(msg)
 
     # Alerte séparée pour les bête noire s'il y en a

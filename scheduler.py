@@ -108,6 +108,40 @@ def refresh_team_stats(silent=False):
     return results
 
 
+def smart_run_value_bet_engine():
+    """
+    Mode intelligent : vérifie d'abord si des matchs existent dans les 3 prochains jours.
+    Si aucune ligue n'a de matchs proches → run annulé, quota préservé.
+    Si au moins une ligue a des matchs → run normal.
+    Le run manuel /run ignore ce check et tourne toujours.
+    """
+    from datetime import timedelta
+    today      = datetime.now(timezone.utc).date()
+    near_dates = {(today + timedelta(days=i)).isoformat() for i in range(3)}
+
+    leagues_with_fixtures = []
+    for league_id in LEAGUES:
+        try:
+            fixtures = get_fixtures(league_id, SEASON, 3)  # seulement 3 jours
+            near = [f for f in fixtures if f.get("date", "")[:10] in near_dates]
+            if near:
+                leagues_with_fixtures.append(LEAGUE_NAMES.get(league_id, str(league_id)))
+        except Exception:
+            pass  # si erreur on inclut quand même
+
+    if not leagues_with_fixtures:
+        log.info("⏭️  Smart run : aucun match dans 3 jours — analyse annulée (quota préservé)")
+        send_message(
+            f"⏭️ <b>Analyse auto annulée</b>\n"
+            f"Aucun match dans les 3 prochains jours.\n"
+            f"<i>Quota Odds API préservé. /run pour forcer.</i>"
+        )
+        return
+
+    log.info(f"✅ Smart run : {len(leagues_with_fixtures)} ligue(s) avec matchs → analyse lancée")
+    run_value_bet_engine(silent=False)
+
+
 def run_value_bet_engine(silent=False):
     if worker_state["running"]:
         send_message("⏳ Une analyse est déjà en cours, patientez...")
@@ -172,13 +206,22 @@ def run_value_bet_engine(silent=False):
             except Exception as e:
                 log.warning(f"  Forme récente indisponible: {e}")
 
-        # 4. Cotes bookmakers
-        try:
-            odds_events = get_odds(league_id)
-            log.info(f"  {len(odds_events)} evenements avec cotes.")
-        except Exception as e:
-            errors.append(f"Cotes {league_name}: {e}")
+        # 4. Cotes bookmakers — mode intelligent : skip si aucun match dans 3 jours
+        from datetime import timedelta
+        today      = datetime.now(timezone.utc).date()
+        near_dates = {(today + timedelta(days=i)).isoformat() for i in range(3)}
+        near_fixtures = [f for f in fixtures if f.get("date", "")[:10] in near_dates]
+        if not near_fixtures:
+            log.info(f"  ⏭️  Aucun match dans 3 jours — appel Odds API ignoré (économie crédit)")
             odds_events = []
+        else:
+            log.info(f"  {len(near_fixtures)} match(s) dans 3 jours → appel Odds API")
+            try:
+                odds_events = get_odds(league_id)
+                log.info(f"  {len(odds_events)} evenements avec cotes.")
+            except Exception as e:
+                errors.append(f"Cotes {league_name}: {e}")
+                odds_events = []
 
         odds_lookup = {}
         for ev in odds_events:
@@ -274,7 +317,17 @@ def run_value_bet_engine(silent=False):
     worker_state["bets_today"] = len(new_value_bets)
     worker_state["running"]    = False
 
-    send_daily_summary(new_value_bets)
+    # Quota restant après le run
+    try:
+        from api_clients import get_odds_api_usage
+        usage     = get_odds_api_usage()
+        remaining = usage.get("remaining", "?")
+        used_run  = usage.get("used", "?")
+        quota_line = f"\n📡 Quota Odds API : <b>{remaining}</b> req. restantes"
+    except Exception:
+        quota_line = ""
+
+    send_daily_summary(new_value_bets, extra=quota_line)
 
     if errors:
         send_message("⚠️ <b>Erreurs durant l'analyse :</b>\n" + "\n".join(f"• {e}" for e in errors))
@@ -761,9 +814,8 @@ def run_scheduler():
         kwargs={"silent": True}
     )
     scheduler.add_job(
-        run_value_bet_engine, "cron",
+        smart_run_value_bet_engine, "cron",
         hour=SCHEDULER_HOUR, minute=0, id="daily_value_bets",
-        kwargs={"silent": False}
     )
     scheduler.add_job(
         check_results, "cron",
