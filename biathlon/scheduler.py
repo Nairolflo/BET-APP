@@ -530,15 +530,8 @@ def _send_results_summary(wins: list, losses: list):
 
 # ─── Commandes Telegram ───────────────────────
 
-COMMANDS = {
-    "/biathlon":    lambda: threading.Thread(
-        target=handle_biathlon_status, daemon=True).start(),
-    "/biathlonrun": lambda: threading.Thread(
-        target=run_biathlon_full_analysis, kwargs={"silent": False}, daemon=True).start(),
-    "/biathlonresults": lambda: threading.Thread(
-        target=check_biathlon_results, kwargs={"silent": False}, daemon=True).start(),
-    "/biathlonstats": handle_biathlon_stats,
-}
+# COMMANDS défini après toutes les fonctions (voir bas du fichier)
+COMMANDS = {}
 
 
 def handle_biathlon_status():
@@ -657,6 +650,14 @@ def start_telegram_polling():
 
 
 # ─── Main ─────────────────────────────────────
+
+# Init COMMANDS après définition de toutes les fonctions
+COMMANDS.update({
+    "/biathlon":        lambda: threading.Thread(target=handle_biathlon_status, daemon=True).start(),
+    "/biathlonrun":     lambda: threading.Thread(target=run_biathlon_full_analysis, kwargs={"silent": False}, daemon=True).start(),
+    "/biathlonresults": lambda: threading.Thread(target=check_biathlon_results, kwargs={"silent": False}, daemon=True).start(),
+    "/biathlonstats":   lambda: threading.Thread(target=handle_biathlon_stats, daemon=True).start(),
+})
 
 if __name__ == "__main__":
     log.info("=" * 55)
