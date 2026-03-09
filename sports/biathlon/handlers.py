@@ -32,12 +32,16 @@ def handle_status():
     else:
         msg += f"📅 <b>{len(races)} course(s) à venir :</b>\n"
         for r in races[:5]:
-            date = r.get("StartTime", "")[:10]
-            name = r.get("ShortDescription", r.get("Description", "?"))
-            loc  = r.get("Location", "")
-            msg += f"  • {date} · {name}"
+            date     = r.get("date", "")
+            name     = r.get("description", "?")
+            loc      = r.get("location", "")
+            fmt_name = r.get("format_name", "")
+            gender   = "♀️" if r.get("gender") == "W" else "♂️"
+            msg += f"  • {gender} {date} · <b>{name}</b>"
             if loc:
                 msg += f" — {loc}"
+            if fmt_name:
+                msg += f" ({fmt_name})"
             msg += "\n"
 
     send_message(msg)
@@ -59,7 +63,7 @@ def handle_results():
 
 def handle_stats():
     from core.telegram import send_message
-    from database import get_connection, rows_to_dicts
+    from core.database import get_connection, rows_to_dicts
 
     conn = get_connection()
     try:
@@ -74,7 +78,7 @@ def handle_stats():
                 AVG(CASE WHEN result != -1 THEN odd ELSE NULL END) as avg_odd
             FROM biathlon_bets
         """)
-        from database import row_to_dict
+        from core.database import row_to_dict
         r = row_to_dict(cur, cur.fetchone())
     finally:
         conn.close()

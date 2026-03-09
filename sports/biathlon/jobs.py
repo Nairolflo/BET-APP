@@ -166,8 +166,8 @@ def update_result(bet_id: int, result: int):
 def run(silent=False):
     """
     Analyse biathlon — mode prédiction pure (sans cotes externes).
-    The Odds API ne couvre pas le biathlon.
-    Calcule les probas H2H via le modèle IBU et envoie les prédictions sur Telegram.
+    Récupère le classement CdM, génère les H2H entre top athlètes,
+    et envoie les prédictions sur Telegram.
     """
     from core.telegram import send_message
 
@@ -179,8 +179,8 @@ def run(silent=False):
     log.info("[Biathlon] Analyse démarrée (mode prédiction pure)")
 
     try:
-        from biathlon.biathlon_client import get_upcoming_races
-        from biathlon.biathlon_model  import predict_h2h, simulate_race
+        from biathlon.biathlon_client import get_upcoming_races, get_cup_standings, RACE_FORMATS
+        from biathlon.biathlon_model  import predict_h2h
 
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
         if not races:
@@ -189,27 +189,88 @@ def run(silent=False):
             state["running"] = False
             return
 
-        if not silent:
-            send_message(
-                f"🎿 <b>Analyse biathlon démarrée</b>\n"
-                f"{len(races)} course(s) trouvée(s)\n"
-                f"<i>Mode prédiction — pas de cotes disponibles sur cette API</i>"
-            )
+        msg = "🎿 <b>Prédictions Biathlon</b>\n\n"
 
-        msg = f"🎿 <b>Prédictions Biathlon</b>\n\n"
-
-        for race in races[:5]:  # max 5 courses
-            race_name   = race.get("description", "Course")
+        for race in races[:3]:
+            race_id     = race.get("race_id", "")
+            description = race.get("description", "Course")
             race_date   = race.get("date", "")
-            race_format = race.get("format_name", race.get("format", ""))
+            fmt_code    = race.get("format", "SR")
+            fmt_name    = race.get("format_name") or RACE_FORMATS.get(fmt_code, fmt_code)
             location    = race.get("location", "")
+            gender      = race.get("gender", "M")
 
-            msg += f"📅 <b>{race_date} — {race_name}</b>"
+            # Titre de la course
+            gender_icon = "♀️" if gender == "W" else "♂️"
+            msg += f"{gender_icon} <b>{description}</b>\n"
+            msg += f"📅 {race_date}"
             if location:
-                msg += f" ({location})"
+                msg += f" · {location}"
+            if fmt_name:
+                msg += f" · {fmt_name}"
             msg += "\n"
-            msg += f"<i>Format : {race_format} · Prédictions modèle IBU</i>\n"
-            msg += "<i>Cotes à vérifier manuellement sur Unibet/Betclic</i>\n\n"
+
+            # Top athlètes depuis le classement CdM
+            standings = get_cup_standings(gender=gender)
+            top_athletes = []
+            for row in standings[:12]:
+                ibu_id = row.get("IBU_ID") or row.get("Id") or row.get("ibu_id", "")
+                name   = row.get("Name") or row.get("name", "")
+                nat    = row.get("Nat") or row.get("nat", "")
+                if ibu_id and name:
+                    top_athletes.append({"ibu_id": ibu_id, "name": name, "nat": nat})
+
+            if len(top_athletes) < 2:
+                msg += "<i>Classement CdM non disponible</i>\n\n"
+                continue
+
+            # H2H entre le top 1 et les suivants (max 4 duels)
+            msg += "\n⚔️ <b>H2H favoris</b>\n"
+            predicted = 0
+            for i in range(min(4, len(top_athletes) - 1)):
+                a = top_athletes[i]
+                b = top_athletes[i + 1]
+                try:
+                    h2h = predict_h2h(a["ibu_id"], b["ibu_id"], fmt_code)
+                    if not h2h:
+                        continue
+                    prob_a = h2h["prob_a_wins"]
+                    prob_b = h2h["prob_b_wins"]
+                    fav    = a if prob_a >= prob_b else b
+                    fav_p  = max(prob_a, prob_b)
+                    und    = b if prob_a >= prob_b else a
+                    und_p  = min(prob_a, prob_b)
+
+                    msg += (
+                        f"  • <b>{fav['name']}</b> {fav.get('nat','')} "
+                        f"<b>{round(fav_p*100)}%</b> "
+                        f"vs {und['name']} {und.get('nat','')} {round(und_p*100)}%\n"
+                    )
+
+                    # Sauvegarde en DB
+                    save_bet({
+                        "race_id":      race_id,
+                        "race_name":    description,
+                        "race_date":    race_date,
+                        "race_format":  fmt_code,
+                        "bet_type":     "H2H",
+                        "pick":         fav["name"],
+                        "opponent":     und["name"],
+                        "odd":          0,
+                        "bookmaker":    "IBU Model",
+                        "prob_model":   fav_p,
+                        "prob_implied": 0,
+                        "value_pct":    0,
+                        "kelly":        0,
+                    })
+                    predicted += 1
+                except Exception as e:
+                    log.warning(f"[Biathlon] H2H {a['name']} vs {b['name']}: {e}")
+
+            if predicted == 0:
+                msg += "<i>Données insuffisantes pour les prédictions</i>\n"
+
+            msg += "<i>💡 Consultez Unibet/Betclic pour les cotes</i>\n\n"
 
         state["last_run"] = datetime.now(timezone.utc)
         state["running"]  = False
