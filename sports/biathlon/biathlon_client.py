@@ -267,7 +267,7 @@ def get_athlete_results(ibu_id: str, season: str = None) -> list:
     params = {"IBUId": ibu_id}
     if season:
         params["SeasonId"] = season
-    data = _get("Results", params, ttl=3600)
+    data = _get("AthResults", params, ttl=3600)
     if not data:
         return []
     return data if isinstance(data, list) else data.get("Results", [])
