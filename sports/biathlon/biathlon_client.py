@@ -263,14 +263,25 @@ def clear_cache():
 
 
 def get_athlete_results(ibu_id: str, season: str = None) -> list:
-    """Tous les résultats d'un athlète. Champs: RaceId, Comp, Season, Place, Rank."""
+    """Tous les résultats d'un athlète."""
     params = {"IBUId": ibu_id}
     if season:
         params["SeasonId"] = season
-    data = _get("AthResults", params, ttl=3600)
-    if not data:
-        return []
-    return data if isinstance(data, list) else data.get("Results", [])
+
+    # Tester les endpoints possibles dans l'ordre
+    for endpoint in ["AthResults", "AthleteResults", "ResultsAth",
+                     "PersonResults", "AthletResults", "AthBio"]:
+        data = _get(endpoint, params, ttl=60)
+        if data is not None:
+            log.info(f"[IBU] get_athlete_results: endpoint OK = {endpoint}, type={type(data).__name__}")
+            if isinstance(data, list) and data:
+                log.info(f"[IBU] AthResults[0] keys: {list(data[0].keys()) if isinstance(data[0], dict) else data[0]}")
+            elif isinstance(data, dict):
+                log.info(f"[IBU] AthResults keys: {list(data.keys())}")
+            return data if isinstance(data, list) else data.get("Results", [])
+
+    log.warning(f"[IBU] Aucun endpoint fonctionnel pour résultats athlète {ibu_id}")
+    return []
 
 
 def get_analytic_results(race_id: str) -> list:
