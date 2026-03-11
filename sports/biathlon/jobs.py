@@ -331,7 +331,7 @@ def run(silent=False):
 
     try:
         from sports.biathlon.biathlon_client import get_upcoming_races, RACE_FORMATS
-        from sports.biathlon.biathlon_model import predict_h2h
+        # predict_h2h remplacé par modèle local (AthResults non disponible)
 
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
         if not races:
@@ -369,22 +369,25 @@ def run(silent=False):
                 log.warning(f"[Biathlon] Pas assez d'athlètes pour {description}")
                 continue
 
-            # H2H entre le top 1 et les suivants (max 4 duels)
-            msg += "\n⚔️ <b>H2H favoris</b>\n"
+            # H2H basé sur ranking moyen des N dernières courses
+            msg += "\n⚔️ <b>Favoris (ranking récent)</b>\n"
             predicted = 0
-            for i in range(min(4, len(top_athletes) - 1)):
+            for i in range(min(5, len(top_athletes) - 1)):
                 a = top_athletes[i]
                 b = top_athletes[i + 1]
                 try:
-                    h2h = predict_h2h(a["ibu_id"], b["ibu_id"], fmt_code)
-                    if not h2h:
-                        continue
-                    prob_a = h2h["prob_a_wins"]
-                    prob_b = h2h["prob_b_wins"]
-                    fav    = a if prob_a >= prob_b else b
-                    fav_p  = max(prob_a, prob_b)
-                    und    = b if prob_a >= prob_b else a
-                    und_p  = min(prob_a, prob_b)
+                    rank_a = a.get("rank", i + 1)
+                    rank_b = b.get("rank", i + 2)
+                    # Probabilité logistique basée sur l'écart de ranking
+                    import math
+                    delta  = (rank_b - rank_a) / max(rank_a + rank_b, 1)
+                    prob_a = 1 / (1 + math.exp(-3 * delta))
+                    prob_b = 1 - prob_a
+
+                    fav   = a if prob_a >= prob_b else b
+                    fav_p = max(prob_a, prob_b)
+                    und   = b if prob_a >= prob_b else a
+                    und_p = min(prob_a, prob_b)
 
                     msg += (
                         f"  • <b>{fav['name']}</b> {fav.get('nat','')} "
@@ -392,7 +395,6 @@ def run(silent=False):
                         f"vs {und['name']} {und.get('nat','')} {round(und_p*100)}%\n"
                     )
 
-                    # Sauvegarde en DB
                     save_bet({
                         "race_id":      race_id,
                         "race_name":    description,
@@ -403,14 +405,14 @@ def run(silent=False):
                         "opponent":     und["name"],
                         "odd":          0,
                         "bookmaker":    "IBU Model",
-                        "prob_model":   fav_p,
+                        "prob_model":   round(fav_p, 4),
                         "prob_implied": 0,
                         "value_pct":    0,
                         "kelly":        0,
                     })
                     predicted += 1
                 except Exception as e:
-                    log.warning(f"[Biathlon] H2H {a['name']} vs {b['name']}: {e}")
+                    log.warning(f"[Biathlon] H2H rank {a['name']} vs {b['name']}: {e}")
 
             if predicted == 0:
                 msg += "<i>Données insuffisantes pour les prédictions</i>\n"
