@@ -373,7 +373,6 @@ def run(silent=False):
             prob_b = 1 - prob_a
 
             # Chercher cotes historiques OddsPortal pour cette paire
-            from sports.biathlon.oddsportal_client import _normalize
             key_sorted = tuple(sorted([sa["name"], sb["name"]]))
             hist = h2h_avg_odds.get(key_sorted)
 
