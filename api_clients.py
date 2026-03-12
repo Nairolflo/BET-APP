@@ -23,12 +23,13 @@ def get_odds_quota() -> dict:
     """Retourne les tokens Odds API restants depuis le cache."""
     return dict(_odds_tokens)
 
-def odds_quota_ok(min_remaining: int = 5) -> bool:
+def odds_quota_ok(min_remaining: int = 5, required: int = None) -> bool:
     """Retourne True si on a encore assez de tokens Odds API."""
+    threshold = required if required is not None else min_remaining
     rem = _odds_tokens.get("remaining")
     if rem is None:
         return True  # pas encore de données → on tente
-    return int(rem) >= min_remaining
+    return int(rem) >= threshold
 
 def _update_odds_quota(headers: dict):
     """Met à jour le cache depuis les headers de réponse Odds API."""
@@ -718,6 +719,10 @@ def get_recent_form(league_id: int, season: int) -> dict:
 def clear_form_cache():
     global _form_cache
     _form_cache = {}
+
+def clear_odds_cache():
+    """Alias — les cotes sont dans le cache HTTP requests, pas de cache local distinct."""
+    clear_form_cache()
 
 
 # ─────────────────────────────────────────────
