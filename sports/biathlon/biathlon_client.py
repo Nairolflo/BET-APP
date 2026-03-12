@@ -24,6 +24,7 @@ IBU_BASE = "http://biathlonresults.com/modules/sportapi/api"
 
 # Cache mémoire (TTL en secondes)
 _cache: dict = {}
+_all_competitions: dict = {}   # {season: [competition, ...]} — chargé une fois par run
 
 # Saisons
 CURRENT_SEASON = "2526"
@@ -214,51 +215,61 @@ def get_recent_race_ids(gender: str = "M", fmt_code: str = "SP",
                         season: str = PREV_SEASON, n: int = 5) -> list:
     """
     Retourne les RaceId des N dernières courses officielles du format/genre donné.
-    Utilisé pour récupérer les athlètes performants récemment.
+    Utilise le cache préchargé pour éviter les appels API répétés.
     """
-    events = get_events(season)
+    # Utiliser le cache si disponible, sinon précharger
+    all_comps = preload_competitions(season)
+
     race_ids = []
-    all_fmt_seen = set()
-    _logged_comp = False
+    for r in all_comps:
+        fmt    = r.get("DisciplineId", "")
+        status = r.get("ScheduleStatus", "")
+        cat_id = r.get("catId", "")
+
+        if status != "FINISHED" or fmt != fmt_code:
+            continue
+
+        r_gender = "W" if cat_id == "SW" else ("M" if cat_id == "SM" else "X")
+        if r_gender != gender and r_gender != "X":
+            continue
+
+        race_ids.append((r.get("StartTime", ""), r.get("RaceId", "")))
+
+    log.info(f"[IBU] get_recent_race_ids {fmt_code}/{gender}/{season}: trouvés={len(race_ids)}")
+    race_ids.sort(reverse=True)
+    return [rid for _, rid in race_ids[:n]]
+
+
+def preload_competitions(season: str = None) -> list:
+    """
+    Charge TOUTES les competitions d'une saison en un minimum d'appels.
+    Résultat mis en cache global pour éviter les appels répétés.
+    """
+    global _all_competitions
+    if season is None:
+        season = CURRENT_SEASON
+    if season in _all_competitions:
+        return _all_competitions[season]
+
+    log.info(f"[IBU] Préchargement compétitions saison {season}...")
+    events = get_events(season)
+    all_comps = []
     for event in events:
         event_id = event.get("EventId", "")
         if not event_id:
             continue
         races = get_competitions(event_id)
-        if not _logged_comp and races and isinstance(races[0], dict):
-            log.info(f"[IBU] Competitions[0] keys: {list(races[0].keys())}")
-            log.info(f"[IBU] Competitions[0]: {races[0]}")
-            _logged_comp = True
-        for r in races:
-            race_id  = r.get("RaceId", "")
-            desc     = r.get("ShortDescription", r.get("Description", ""))
-            fmt      = r.get("DisciplineId", "")          # vrai champ IBU
-            status   = r.get("ScheduleStatus", "")        # "FINISHED" = officiel
-            cat_id   = r.get("catId", "")                 # "SM"=hommes "SW"=femmes "MX"=mixte
-            all_fmt_seen.add(fmt)
+        all_comps.extend(races)
 
-            if status != "FINISHED":
-                continue
-            if fmt != fmt_code:
-                continue
-
-            # Genre via catId : SM=hommes, SW=femmes, MX=mixte
-            r_gender = "W" if cat_id == "SW" else ("M" if cat_id == "SM" else "X")
-            if r_gender != gender and r_gender != "X":
-                continue
-
-            race_ids.append((r.get("StartTime",""), race_id))
-
-    log.info(f"[IBU] get_recent_race_ids {fmt_code}/{gender}/{season}: "
-             f"formats vus={all_fmt_seen}, trouvés={len(race_ids)}")
-    # Trier par date décroissante et prendre les N derniers
-    race_ids.sort(reverse=True)
-    return [rid for _, rid in race_ids[:n]]
+    _all_competitions[season] = all_comps
+    log.info(f"[IBU] Préchargement OK: {len(all_comps)} compétitions saison {season}")
+    return all_comps
 
 
 def clear_cache():
-    global _cache
+    global _cache, _all_competitions
     _cache = {}
+    _all_competitions = {}
     log.info("[IBU] Cache vidé.")
 
 

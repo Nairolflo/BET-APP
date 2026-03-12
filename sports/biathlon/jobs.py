@@ -374,7 +374,16 @@ def run(silent=False):
     log.info("[Biathlon] Analyse démarrée")
 
     try:
-        from sports.biathlon.biathlon_client import get_upcoming_races, RACE_FORMATS
+        from sports.biathlon.biathlon_client import (
+            get_upcoming_races, RACE_FORMATS, preload_competitions,
+            CURRENT_SEASON, PREV_SEASON
+        )
+
+        # ── Précharger TOUTES les compétitions une seule fois ──
+        log.info("[Biathlon] Préchargement compétitions...")
+        preload_competitions(CURRENT_SEASON)
+        preload_competitions(PREV_SEASON)
+        log.info("[Biathlon] Préchargement terminé")
 
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
         if not races:
