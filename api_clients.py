@@ -157,10 +157,29 @@ FD_COMPETITION_TO_LEAGUE = {
 }
 
 PREFERRED_BOOKMAKERS = [
-    "Betclic (FR)", "Betclic",
-    "Winamax (FR)", "Winamax",
-    "Unibet (FR)", "Unibet",
+    "Betclic (FR)", "Betclic FR",
+    "Winamax (FR)", "Winamax FR", "Winamax",
+    "Unibet (FR)",  "Unibet FR",
 ]
+
+def _is_preferred_bookmaker(bk_name: str, bk_key: str) -> bool:
+    """Accepte uniquement Winamax, Betclic, Unibet version française."""
+    if bk_key in ("winamax_fr", "betclic_fr", "unibet_fr"):
+        return True
+    name = bk_name.strip()
+    # Exact match sur la liste FR
+    if name in PREFERRED_BOOKMAKERS:
+        return True
+    # Winamax sans suffixe pays (pas de SE, NL, IT...)
+    if name.lower() == "winamax":
+        return True
+    # Betclic/Unibet : accepter seulement si "(FR)" ou "FR" explicite
+    for prefix in ("betclic", "unibet"):
+        if name.lower().startswith(prefix):
+            rest = name[len(prefix):].strip().upper()
+            if rest in ("", "(FR)", "FR", " (FR)", " FR"):
+                return True
+    return False
 
 TEAM_NAME_MAP = {
     # Ligue 1
@@ -342,10 +361,7 @@ def get_odds(league_id: int) -> list:
             if entry:
                 all_bk[bk_name] = entry
                 bk_key = bk.get("key", "")
-                is_pref = (bk_name in PREFERRED_BOOKMAKERS or
-                           any(p.lower() in bk_name.lower() for p in PREFERRED_BOOKMAKERS) or
-                           bk_key in ("winamax_fr", "betclic_fr", "unibet_fr"))
-                if is_pref:
+                if _is_preferred_bookmaker(bk_name, bk_key):
                     pref_bk[bk_name] = entry
 
         final = pref_bk if pref_bk else all_bk
