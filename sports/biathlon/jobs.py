@@ -109,32 +109,55 @@ def _time_to_sec(t: str):
         return int(p[0])*3600+int(p[1])*60+float(p[2]) if len(p)==3 else int(p[0])*60+float(p[1])
     except: return None
 
-def build_stats_for(gender: str, fmt_code: str, n: int = 10) -> dict:
+# Formats similaires pour élargir le pool d'athlètes
+SIMILAR_FORMATS = {
+    "SP": [("SP", 1.0), ("PU", 0.7), ("MS", 0.6), ("IN", 0.5)],
+    "PU": [("PU", 1.0), ("SP", 0.7), ("MS", 0.6), ("IN", 0.5)],
+    "MS": [("MS", 1.0), ("PU", 0.7), ("SP", 0.6), ("IN", 0.5)],
+    "IN": [("IN", 1.0), ("SP", 0.6), ("PU", 0.5), ("MS", 0.5)],
+}
+
+def build_stats_for(gender: str, fmt_code: str, n: int = 8) -> dict:
     """
-    Stats depuis les N dernières courses (même genre + format).
-    - Rang relatif (rank/nb_finishers)
-    - Pondération récence exponentielle (course récente pèse plus)
+    Stats depuis les N dernières courses par format (même genre).
+    - Utilise TOUS les formats individuels pour ne manquer aucun athlète
+    - Pondération format : SP pour SP > PU > MS > IN
+    - Pondération récence exponentielle
     - Ratio ski : temps_athlète / temps_winner
     """
     from sports.biathlon.biathlon_client import get_results, get_recent_race_ids, \
         CURRENT_SEASON, PREV_SEASON
 
-    race_ids = get_recent_race_ids(gender=gender, fmt_code=fmt_code,
-                                    season=CURRENT_SEASON, n=n)
-    if len(race_ids) < 3:
-        race_ids += get_recent_race_ids(gender=gender, fmt_code=fmt_code,
-                                         season=PREV_SEASON, n=n-len(race_ids))
-    race_ids = race_ids[:n]
+    # Collecte les courses par format avec leur poids
+    fmt_weights = SIMILAR_FORMATS.get(fmt_code, [(fmt_code, 1.0)])
+    all_races = []  # [(race_id, fmt_weight)]
+    for fmt, fmt_w in fmt_weights:
+        ids = get_recent_race_ids(gender=gender, fmt_code=fmt,
+                                   season=CURRENT_SEASON, n=n)
+        if len(ids) < 2:
+            ids += get_recent_race_ids(gender=gender, fmt_code=fmt,
+                                        season=PREV_SEASON, n=n-len(ids))
+        for rid in ids[:n]:
+            all_races.append((rid, fmt_w))
 
-    if not race_ids:
+    if not all_races:
         log.warning(f"[Biathlon] Aucune course récente {fmt_code}/{gender}")
         return {}
 
-    log.info(f"[Biathlon] Stats {fmt_code}/{gender} sur {len(race_ids)} courses")
+    log.info(f"[Biathlon] Stats {fmt_code}/{gender} — {len(all_races)} courses tous formats")
+
+    # Dédupliquer (une course peut apparaître dans plusieurs formats)
+    seen = set()
+    unique_races = []
+    for rid, fw in all_races:
+        if rid not in seen:
+            seen.add(rid)
+            unique_races.append((rid, fw))
 
     data = {}
-    for race_idx, race_id in enumerate(race_ids):
-        recency_w = 0.85 ** race_idx  # plus récent = poids plus élevé
+    # Trier par format_weight desc puis par ordre chronologique
+    for race_idx, (race_id, fmt_w) in enumerate(unique_races):
+        recency_w = (0.85 ** race_idx) * fmt_w  # récence × pertinence format
         try:
             results  = get_results(race_id)
             finished = [r for r in results if r.get("Rank") and not r.get("IRM")]
