@@ -1,82 +1,73 @@
 """
-sports/biathlon/handlers.py — Handlers Telegram biathlon
-Flow interactif H2H :
-  biat_h2h               → liste courses à venir
-  biat_race_{race_id}    → choix type (H2H / Podium)
-  biat_h2h_{race_id}     → liste athlètes (page 0)
-  biat_h2hp_{race_id}_{p}→ page suivante athlètes
-  biat_sel_{race_id}_{ibu_a} → athlète A sélectionné, choisir B
-  biat_vs_{race_id}_{a}_{b}  → fiche duel finale
-  biat_pod_{race_id}     → top podium de la course
+sports/biathlon/handlers.py
+Flow H2H interactif — cache global par race_id pour éviter rechargements IBU.
 """
+import math
 import threading
 import logging
-import math
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-# État session H2H : garde le choix de l'athlète A entre deux callbacks
-_session: dict = {}   # chat_id → {"race_id": ..., "ibu_a": ..., "stats": ...}
+# Cache stats global par race_id (chargé une fois, réutilisé pour toutes les pages)
+_stats_cache: dict = {}
+# Session par chat_id (athlète A sélectionné)
+_session: dict = {}
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
-
-def _fmt_name(fmt: str) -> str:
+def _fmt_name(fmt):
     return {"SP":"Sprint","PU":"Poursuite","IN":"Individuelle",
             "MS":"Mass Start","RL":"Relais","SR":"Relais Mixte"}.get(fmt, fmt)
 
-def _gender_icon(g: str) -> str:
+def _gender_icon(g):
     return "♀️" if g == "W" else "♂️"
 
-def _build_stats(gender, fmt, n=6):
+def _build_stats(gender, fmt, n=10):
     from sports.biathlon.jobs import build_stats_for
     return build_stats_for(gender, fmt, n)
 
+def _get_race_stats(race_id: str) -> dict:
+    """Stats mises en cache par race_id — appel IBU une seule fois."""
+    if race_id in _stats_cache:
+        return _stats_cache[race_id]
+    from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
+    preload_competitions(CURRENT_SEASON)
+    races  = get_upcoming_races(days_ahead=7)
+    race   = next((r for r in races if r.get("race_id") == race_id), {})
+    gender = race.get("gender","M")
+    fmt    = race.get("format","SP")
+    desc   = race.get("description","")
+    stats  = _build_stats(gender, fmt, n=10)
+    _stats_cache[race_id] = {"stats": stats, "fmt": fmt, "gender": gender, "desc": desc}
+    return _stats_cache[race_id]
+
 def _calc(sa, sb, fmt):
     from sports.biathlon.jobs import calc_rating, h2h_prob
-    ra = calc_rating(sa, fmt)
-    rb = calc_rating(sb, fmt)
+    ra = calc_rating(sa, fmt); rb = calc_rating(sb, fmt)
     pa = h2h_prob(ra, rb)
     return pa, 1-pa
 
-def _make_keyboard(buttons):
-    """buttons = [[(text, callback_data), ...], ...]"""
-    from core.telegram import make_keyboard
-    return make_keyboard([[{"text": t, "callback_data": d} for t,d in row] for row in buttons])
 
-
-# ─── Handlers principaux ────────────────────────────────────────────────────
+# ─── Handlers principaux ───────────────────────────────────────────────────
 
 def handle_status():
     from core.telegram import send_message
     from sports.biathlon.jobs import state, BIATHLON_DAYS_AHEAD, ANALYSIS_HOUR
-
     try:
         from sports.biathlon.biathlon_client import get_upcoming_races
         races = get_upcoming_races(days_ahead=BIATHLON_DAYS_AHEAD)
     except Exception as e:
-        send_message(f"❌ Impossible de contacter l'API IBU : {e}")
-        return
-
-    last_run = state["last_run"]
-    msg = (
-        f"🎿 <b>Biathlon — Statut</b>\n\n"
-        f"Dernière analyse : {last_run.strftime('%Y-%m-%d %H:%M UTC') if last_run else 'Aucune'}\n"
-        f"Analyse auto : {ANALYSIS_HOUR:02d}h30 UTC\n\n"
-    )
-
+        send_message(f"❌ IBU API : {e}"); return
+    last = state["last_run"]
+    msg = (f"🎿 <b>Biathlon — Statut</b>\n\n"
+           f"Dernière analyse : {last.strftime('%Y-%m-%d %H:%M UTC') if last else 'Aucune'}\n"
+           f"Analyse auto : {ANALYSIS_HOUR:02d}h30 UTC\n\n")
     if not races:
-        msg += "Aucune course prévue dans les prochains jours."
-        send_message(msg)
-        return
-
-    for r in races[:8]:
-        g = _gender_icon(r.get("gender","M"))
-        msg += f"{g} {r.get('description','')} · {r.get('date','')} · {_fmt_name(r.get('format',''))}\n"
-
+        msg += "Aucune course prévue."
+    else:
+        for r in races[:8]:
+            msg += f"{_gender_icon(r.get('gender','M'))} {r.get('description','')} · {r.get('date','')} · {_fmt_name(r.get('format',''))}\n"
     send_message(msg)
-
 
 def handle_run():
     from core.telegram import send_message
@@ -84,63 +75,47 @@ def handle_run():
     send_message("⏳ Analyse biathlon en cours...")
     threading.Thread(target=run, daemon=True).start()
 
-
 def handle_results():
     from sports.biathlon.jobs import check_results
     threading.Thread(target=check_results, daemon=True).start()
 
-
 def handle_stats():
     from core.telegram import send_message
     from sports.biathlon.jobs import get_pending_bets
-    bets = get_pending_bets()
-    send_message(f"🎿 {len(bets)} paris biathlon en attente.")
+    send_message(f"🎿 {len(get_pending_bets())} paris biathlon en attente.")
 
 
-# ─── Flow interactif H2H ────────────────────────────────────────────────────
+# ─── Flow H2H ──────────────────────────────────────────────────────────────
 
 def handle_h2h_menu():
-    """Étape 1 : affiche les courses à venir comme boutons."""
+    """Étape 1 : courses à venir."""
     from core.telegram import send_message, make_keyboard
     from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
-
     try:
         preload_competitions(CURRENT_SEASON)
-        races = get_upcoming_races(days_ahead=7)
-        races = [r for r in races if r.get("format") not in ("RL","SR","MX")]
+        races = [r for r in get_upcoming_races(days_ahead=7)
+                 if r.get("format") not in ("RL","SR","MX")]
     except Exception as e:
-        send_message(f"❌ IBU API : {e}")
-        return
-
+        send_message(f"❌ IBU API : {e}"); return
     if not races:
-        send_message("🎿 Aucune course individuelle à venir.")
-        return
+        send_message("🎿 Aucune course individuelle à venir."); return
 
     rows = []
     for r in races[:8]:
-        g = _gender_icon(r.get("gender","M"))
-        label = f"{g} {r.get('description','')} · {r.get('date','')}"
-        rid = r.get("race_id","")
-        rows.append([(label, f"biat_race|{rid}")])
-    rows.append([("◀️ Menu", "menu_biathlon")])
-
-    kb = make_keyboard([[{"text": t, "callback_data": d} for t,d in row] for row in rows])
-    send_message("🎿 <b>Choisir une course :</b>", reply_markup=kb)
+        label = f"{_gender_icon(r.get('gender','M'))} {r.get('description','')} · {r.get('date','')}"
+        rows.append([{"text": label, "callback_data": f"biat_race|{r.get('race_id','')}"}])
+    rows.append([{"text": "◀️ Menu", "callback_data": "menu_biathlon"}])
+    send_message("🎿 <b>Choisir une course :</b>", reply_markup=make_keyboard(rows))
 
 
 def handle_race_menu(race_id: str):
-    """Étape 2 : H2H ou Podium ?"""
+    """Étape 2 : H2H ou Podium."""
     from core.telegram import send_message, make_keyboard
-    from sports.biathlon.biathlon_client import get_upcoming_races, CURRENT_SEASON, preload_competitions
-
     try:
-        preload_competitions(CURRENT_SEASON)
-        races = get_upcoming_races(days_ahead=7)
-        race = next((r for r in races if r.get("race_id") == race_id), None)
+        cached = _get_race_stats(race_id)
+        desc = cached["desc"]
     except Exception:
-        race = None
-
-    desc = race.get("description","Course") if race else race_id
+        desc = race_id
     kb = make_keyboard([
         [{"text": "⚔️ H2H — Choisir deux athlètes", "callback_data": f"biat_h2h|{race_id}"}],
         [{"text": "🏆 Podium — Top favoris",         "callback_data": f"biat_pod|{race_id}"}],
@@ -149,189 +124,76 @@ def handle_race_menu(race_id: str):
     send_message(f"🎿 <b>{desc}</b>\n\nQue veux-tu analyser ?", reply_markup=kb)
 
 
-def handle_h2h_athletes(race_id: str, page: int = 0, chat_id: str = None):
-    """Étape 3 : liste paginée des athlètes pour choisir A."""
+def _send_athlete_list(race_id: str, page: int, chat_id: str, title: str,
+                        cb_prefix: str, cb_select: str, extra_row=None):
+    """Affiche une liste paginée d'athlètes. Réutilisé pour A et B."""
     from core.telegram import send_message, make_keyboard
-    from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
+    cached = _get_race_stats(race_id)
+    stats  = cached["stats"]
+    desc   = cached["desc"]
 
-    try:
-        preload_competitions(CURRENT_SEASON)
-        races = get_upcoming_races(days_ahead=7)
-        race = next((r for r in races if r.get("race_id") == race_id), None)
-    except Exception:
-        race = None
-
-    if not race:
-        send_message("❌ Course introuvable.")
-        return
-
-    gender = race.get("gender","M")
-    fmt    = race.get("format","SP")
-    desc   = race.get("description","Course")
-
-    stats = _build_stats(gender, fmt, n=10)  # 10 dernières courses = plus d'athlètes
     if not stats:
-        send_message("❌ Pas de stats disponibles pour cette course.")
-        return
+        send_message("❌ Pas de stats disponibles."); return
 
-    # Tous les athlètes triés par rang moyen
     top = sorted(stats.items(), key=lambda x: x[1]["avg_rank"])
-    PER_PAGE = 10
+    PER_PAGE    = 10
     total_pages = math.ceil(len(top) / PER_PAGE)
-    slice_ = top[page*PER_PAGE:(page+1)*PER_PAGE]
+    slice_      = top[page*PER_PAGE:(page+1)*PER_PAGE]
 
     rows = []
     for ibu, s in slice_:
-        label = f"{s['name']} {s['nat']} · #{round(s['avg_rank'],1)}"
-        rows.append([{"text": label, "callback_data": f"biat_sel|{race_id}|{ibu}"}])
+        rows.append([{"text": f"{s['name']} {s['nat']} · #{round(s['avg_rank'],1)}",
+                      "callback_data": f"{cb_select}|{race_id}|{ibu}"}])
 
-    # Navigation pages
     nav = []
     if page > 0:
-        nav.append({"text": f"◀️ Préc.", "callback_data": f"biat_h2hp|{race_id}|{page-1}"})
+        nav.append({"text": "◀️ Préc.", "callback_data": f"{cb_prefix}|{race_id}|{page-1}"})
     nav.append({"text": f"{page+1}/{total_pages} · {len(top)} athlètes", "callback_data": "noop"})
     if page < total_pages - 1:
-        nav.append({"text": f"Suiv. ▶️", "callback_data": f"biat_h2hp|{race_id}|{page+1}"})
+        nav.append({"text": "Suiv. ▶️", "callback_data": f"{cb_prefix}|{race_id}|{page+1}"})
     rows.append(nav)
+    if extra_row:
+        rows.append(extra_row)
     rows.append([{"text": "◀️ Retour", "callback_data": f"biat_race|{race_id}"}])
 
-    kb = make_keyboard(rows)
-    send_message(
-        f"🎿 <b>{desc}</b>\n"
-        f"👤 Choisir l'athlète A — {len(top)} disponibles",
-        reply_markup=kb
-    )
+    send_message(f"🎿 <b>{desc}</b>\n{title}",
+                 reply_markup=make_keyboard(rows))
 
-    # Sauvegarde stats en session
     if chat_id:
-        _session[chat_id] = {"race_id": race_id, "gender": gender, "fmt": fmt,
-                              "desc": desc, "stats": stats, "ibu_a": None}
+        _session[chat_id] = {**cached, "race_id": race_id}
+
+
+def handle_h2h_athletes(race_id: str, page: int = 0, chat_id: str = None):
+    """Étape 3 : choisir athlète A."""
+    try:
+        _send_athlete_list(race_id, page, chat_id,
+                           title="👤 Choisir l'athlète A",
+                           cb_prefix=f"biat_h2hp|{race_id}",
+                           cb_select="biat_sel")
+    except Exception as e:
+        from core.telegram import send_message
+        send_message(f"❌ {e}")
 
 
 def handle_select_a(race_id: str, ibu_a: str, chat_id: str):
-    """Étape 4 : A sélectionné, choisir B."""
+    """Étape 4 : A choisi, afficher liste B page 0."""
+    _send_athlete_b(race_id, ibu_a, 0, chat_id)
+
+
+def _send_athlete_b(race_id: str, ibu_a: str, page: int, chat_id: str):
+    """Affiche la liste des adversaires B paginée."""
     from core.telegram import send_message, make_keyboard
-
-    sess = _session.get(chat_id, {})
-    if not sess or sess.get("race_id") != race_id:
-        # Recharge stats
-        from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
-        preload_competitions(CURRENT_SEASON)
-        races = get_upcoming_races(days_ahead=7)
-        race  = next((r for r in races if r.get("race_id") == race_id), {})
-        gender, fmt = race.get("gender","M"), race.get("format","SP")
-        stats = _build_stats(gender, fmt)
-        sess  = {"race_id": race_id, "gender": gender, "fmt": fmt,
-                 "desc": race.get("description",""), "stats": stats}
-        _session[chat_id] = sess
-
-    sess["ibu_a"] = ibu_a
-    stats = sess.get("stats", {})
-    sa    = stats.get(ibu_a, {})
-    name_a = sa.get("name", ibu_a)
-    fmt   = sess.get("fmt","SP")
-    desc  = sess.get("desc","")
-
-    # Liste B (tous sauf A) triés par avg_rank — paginés
-    top = [(ibu, s) for ibu, s in sorted(stats.items(), key=lambda x: x[1]["avg_rank"]) if ibu != ibu_a]
-    PER_PAGE = 10
-    total_pages = math.ceil(len(top) / PER_PAGE)
-
-    rows = []
-    for ibu_b, sb in top[:PER_PAGE]:
-        label = f"{sb['name']} {sb['nat']} · #{round(sb['avg_rank'],1)}"
-        rows.append([{"text": label, "callback_data": f"biat_vs|{race_id}|{ibu_a}|{ibu_b}"}])
-
-    nav = [{"text": f"1/{total_pages} · {len(top)} athlètes", "callback_data": "noop"}]
-    if total_pages > 1:
-        nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb|{race_id}|{ibu_a}|1"})
-    rows.append(nav)
-    rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h|{race_id}"}])
-
-    kb = make_keyboard(rows)
-    send_message(
-        f"🎿 <b>{desc}</b>\n"
-        f"⚔️ <b>{name_a}</b> vs ...\n\n"
-        f"Choisir l'adversaire :",
-        reply_markup=kb
-    )
-
-
-def handle_duel(race_id: str, ibu_a: str, ibu_b: str, chat_id: str):
-    """Étape 5 : fiche duel complète."""
-    from core.telegram import send_message, make_keyboard
-
-    sess = _session.get(chat_id, {})
-    stats = sess.get("stats") if sess.get("race_id") == race_id else None
-    fmt   = sess.get("fmt","SP") if sess else "SP"
-    desc  = sess.get("desc","") if sess else ""
+    cached = _get_race_stats(race_id)
+    stats  = cached["stats"]
+    desc   = cached["desc"]
 
     if not stats:
-        from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
-        preload_competitions(CURRENT_SEASON)
-        races = get_upcoming_races(days_ahead=7)
-        race  = next((r for r in races if r.get("race_id") == race_id), {})
-        fmt   = race.get("format","SP")
-        desc  = race.get("description","")
-        gender = race.get("gender","M")
-        stats  = _build_stats(gender, fmt)
+        send_message("❌ Pas de stats."); return
 
-    sa = stats.get(ibu_a)
-    sb = stats.get(ibu_b)
-    if not sa or not sb:
-        send_message("❌ Athlètes introuvables dans les stats.")
-        return
-
-    pa, pb = _calc(sa, sb, fmt)
-    fa = round(1/pa, 2)
-    fb = round(1/pb, 2)
-
-    winner = sa if pa > pb else sb
-    loser  = sb if pa > pb else sa
-    pw = max(pa, pb)
-
-    msg = (
-        f"⚔️ <b>{sa['name']} vs {sb['name']}</b>\n"
-        f"🎿 {desc} · {_fmt_name(fmt)}\n\n"
-        f"📊 <b>Probabilités modèle IBU</b>\n"
-        f"  {sa['name']} : <b>{round(pa*100)}%</b> → c.j. {fa}\n"
-        f"  {sb['name']} : <b>{round(pb*100)}%</b> → c.j. {fb}\n\n"
-        f"🏆 Favori : <b>{winner['name']}</b> ({round(pw*100)}%)\n\n"
-        f"🎯 <b>Stats tir</b>\n"
-        f"  {sa['name']} : Couché {round(sa['prone_acc']*100)}% · Debout {round(sa['standing_acc']*100)}%\n"
-        f"  {sb['name']} : Couché {round(sb['prone_acc']*100)}% · Debout {round(sb['standing_acc']*100)}%\n\n"
-        f"⛷️ <b>Forme</b>\n"
-        f"  {sa['name']} : Rang moy. #{round(sa['avg_rank'],1)} · Top3 {round(sa['top3_rate']*100)}% sur {sa['n_races']} courses\n"
-        f"  {sb['name']} : Rang moy. #{round(sb['avg_rank'],1)} · Top3 {round(sb['top3_rate']*100)}% sur {sb['n_races']} courses\n\n"
-        f"💡 <i>Comparer avec Winamax — si cote > {fa} sur {sa['name']} → value bet</i>"
-    )
-
-    kb = make_keyboard([
-        [{"text": "🔄 Changer adversaire", "callback_data": f"biat_sel|{race_id}|{ibu_a}"}],
-        [{"text": "◀️ Retour courses",     "callback_data": "biat_h2h_menu"}],
-    ])
-    send_message(msg, reply_markup=kb)
-
-
-def handle_select_b_page(race_id: str, ibu_a: str, page: int, chat_id: str):
-    """Page suivante pour choisir l'adversaire B."""
-    from core.telegram import send_message, make_keyboard
-
-    sess  = _session.get(chat_id, {})
-    stats = sess.get("stats") if sess.get("race_id") == race_id else None
-    desc  = sess.get("desc","") if sess else ""
-
-    if not stats:
-        from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
-        preload_competitions(CURRENT_SEASON)
-        races  = get_upcoming_races(days_ahead=7)
-        race   = next((r for r in races if r.get("race_id") == race_id), {})
-        stats  = _build_stats(race.get("gender","M"), race.get("format","SP"), n=10)
-        desc   = race.get("description","")
-
-    sa   = stats.get(ibu_a, {})
+    sa     = stats.get(ibu_a, {})
     name_a = sa.get("name", ibu_a)
-    top  = [(ibu, s) for ibu, s in sorted(stats.items(), key=lambda x: x[1]["avg_rank"]) if ibu != ibu_a]
+    top    = [(ibu, s) for ibu, s in sorted(stats.items(), key=lambda x: x[1]["avg_rank"])
+              if ibu != ibu_a]
 
     PER_PAGE    = 10
     total_pages = math.ceil(len(top) / PER_PAGE)
@@ -339,65 +201,90 @@ def handle_select_b_page(race_id: str, ibu_a: str, page: int, chat_id: str):
 
     rows = []
     for ibu_b, sb in slice_:
-        label = f"{sb['name']} {sb['nat']} · #{round(sb['avg_rank'],1)}"
-        rows.append([{"text": label, "callback_data": f"biat_vs|{race_id}|{ibu_a}|{ibu_b}"}])
+        rows.append([{"text": f"{sb['name']} {sb['nat']} · #{round(sb['avg_rank'],1)}",
+                      "callback_data": f"biat_vs|{race_id}|{ibu_a}|{ibu_b}"}])
 
     nav = []
     if page > 0:
         nav.append({"text": "◀️ Préc.", "callback_data": f"biat_selb|{race_id}|{ibu_a}|{page-1}"})
-    nav.append({"text": f"{page+1}/{total_pages}", "callback_data": "noop"})
+    nav.append({"text": f"{page+1}/{total_pages} · {len(top)} athlètes", "callback_data": "noop"})
     if page < total_pages - 1:
         nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb|{race_id}|{ibu_a}|{page+1}"})
     rows.append(nav)
     rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h|{race_id}"}])
 
-    kb = make_keyboard(rows)
-    send_message(
-        f"🎿 <b>{desc}</b>\n"
-        f"⚔️ <b>{name_a}</b> vs ...\n"
-        f"<i>page {page+1}/{total_pages} · {len(top)} athlètes</i>",
-        reply_markup=kb
-    )
-    """Podium — top 8 favoris de la course."""
+    send_message(f"🎿 <b>{desc}</b>\n⚔️ <b>{name_a}</b> vs ... · page {page+1}/{total_pages}",
+                 reply_markup=make_keyboard(rows))
+
+    if chat_id:
+        _session[chat_id] = {**cached, "race_id": race_id, "ibu_a": ibu_a}
+
+
+def handle_select_b_page(race_id: str, ibu_a: str, page: int, chat_id: str):
+    _send_athlete_b(race_id, ibu_a, page, chat_id)
+
+
+def handle_duel(race_id: str, ibu_a: str, ibu_b: str, chat_id: str):
+    """Étape 5 : fiche duel."""
     from core.telegram import send_message, make_keyboard
-    from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON
+    cached = _get_race_stats(race_id)
+    stats  = cached["stats"]
+    fmt    = cached["fmt"]
+    desc   = cached["desc"]
+
+    sa = stats.get(ibu_a)
+    sb = stats.get(ibu_b)
+    if not sa or not sb:
+        send_message("❌ Athlètes introuvables."); return
+
+    pa, pb = _calc(sa, sb, fmt)
+    fa, fb = round(1/pa, 2), round(1/pb, 2)
+    winner = sa if pa > pb else sb
+
+    msg = (
+        f"⚔️ <b>{sa['name']} vs {sb['name']}</b>\n"
+        f"🎿 {desc} · {_fmt_name(fmt)}\n\n"
+        f"📊 <b>Probabilités modèle IBU</b>\n"
+        f"  {sa['name']} : <b>{round(pa*100)}%</b> → c.j. {fa}\n"
+        f"  {sb['name']} : <b>{round(pb*100)}%</b> → c.j. {fb}\n\n"
+        f"🏆 Favori : <b>{winner['name']}</b> ({round(max(pa,pb)*100)}%)\n\n"
+        f"🎯 <b>Stats tir</b>\n"
+        f"  {sa['name']} : Couché {round(sa['prone_acc']*100)}% · Debout {round(sa['standing_acc']*100)}%\n"
+        f"  {sb['name']} : Couché {round(sb['prone_acc']*100)}% · Debout {round(sb['standing_acc']*100)}%\n\n"
+        f"⛷️ <b>Forme</b>\n"
+        f"  {sa['name']} : Rang moy. #{round(sa['avg_rank'],1)} · Top3 {round(sa['top3_rate']*100)}% · {sa['n_races']} courses\n"
+        f"  {sb['name']} : Rang moy. #{round(sb['avg_rank'],1)} · Top3 {round(sb['top3_rate']*100)}% · {sb['n_races']} courses\n\n"
+        f"💡 <i>Si Winamax cote {sa['name']} > {fa} → value bet</i>"
+    )
+    kb = make_keyboard([
+        [{"text": "🔄 Changer adversaire", "callback_data": f"biat_sel|{race_id}|{ibu_a}"}],
+        [{"text": "◀️ Retour courses",     "callback_data": "biat_h2h_menu"}],
+    ])
+    send_message(msg, reply_markup=kb)
+
+
+def handle_podium(race_id: str):
+    """Top favoris de la course."""
+    from core.telegram import send_message, make_keyboard
     from sports.biathlon.jobs import calc_rating
+    cached = _get_race_stats(race_id)
+    stats  = cached["stats"]
+    fmt    = cached["fmt"]
+    desc   = cached["desc"]
 
-    try:
-        preload_competitions(CURRENT_SEASON)
-        races = get_upcoming_races(days_ahead=7)
-        race  = next((r for r in races if r.get("race_id") == race_id), None)
-    except Exception as e:
-        send_message(f"❌ {e}")
-        return
-
-    if not race:
-        send_message("❌ Course introuvable.")
-        return
-
-    gender = race.get("gender","M")
-    fmt    = race.get("format","SP")
-    desc   = race.get("description","")
-
-    stats = _build_stats(gender, fmt)
     if not stats:
-        send_message("❌ Pas de stats disponibles.")
-        return
+        send_message("❌ Pas de stats."); return
 
-    top = sorted(stats.items(), key=lambda x: -calc_rating(x[1], fmt))[:8]
-    total_rating = sum(calc_rating(s, fmt) for _, s in top)
+    top   = sorted(stats.items(), key=lambda x: -calc_rating(x[1], fmt))[:8]
+    total = sum(calc_rating(s, fmt) for _, s in top)
+    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣"]
 
     msg = f"🏆 <b>Podium favori — {desc}</b>\n🎿 {_fmt_name(fmt)}\n\n"
-    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣"]
     for i, (ibu, s) in enumerate(top):
-        r  = calc_rating(s, fmt)
-        pct = round(r / total_rating * 100)
-        msg += (
-            f"{medals[i]} <b>{s['name']}</b> {s['nat']} — {pct}%\n"
-            f"   Rang moy. #{round(s['avg_rank'],1)} · "
-            f"C:{round(s['prone_acc']*100)}% D:{round(s['standing_acc']*100)}% · "
-            f"Top3: {round(s['top3_rate']*100)}%\n"
-        )
+        pct = round(calc_rating(s, fmt) / total * 100)
+        msg += (f"{medals[i]} <b>{s['name']}</b> {s['nat']} — {pct}%\n"
+                f"   #{round(s['avg_rank'],1)} · C:{round(s['prone_acc']*100)}%"
+                f" D:{round(s['standing_acc']*100)}% · Top3:{round(s['top3_rate']*100)}%\n")
 
     kb = make_keyboard([
         [{"text": "⚔️ Voir H2H", "callback_data": f"biat_h2h|{race_id}"}],
