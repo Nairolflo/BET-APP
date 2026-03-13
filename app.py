@@ -2,7 +2,7 @@
 app.py - Flask web interface ValueBet Bot
 """
 import os
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from dotenv import load_dotenv
 load_dotenv()
 
