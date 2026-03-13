@@ -10,12 +10,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # Ajoute la racine du projet au path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from database import init_db
+from database import init_db, purge_non_fr_bets
 
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else "schedule"
 
     init_db()
+    purged = purge_non_fr_bets()
+    if purged:
+        print(f"[DB] {purged} bets non-FR supprimés.")
 
     if command == "schedule":
         from core.scheduler import run_scheduler
