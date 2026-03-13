@@ -121,7 +121,7 @@ def handle_h2h_menu():
         g = _gender_icon(r.get("gender","M"))
         label = f"{g} {r.get('description','')} · {r.get('date','')}"
         rid = r.get("race_id","")
-        rows.append([(label, f"biat_race_{rid}")])
+        rows.append([(label, f"biat_race|{rid}")])
     rows.append([("◀️ Menu", "menu_biathlon")])
 
     kb = make_keyboard([[{"text": t, "callback_data": d} for t,d in row] for row in rows])
@@ -142,8 +142,8 @@ def handle_race_menu(race_id: str):
 
     desc = race.get("description","Course") if race else race_id
     kb = make_keyboard([
-        [{"text": "⚔️ H2H — Choisir deux athlètes", "callback_data": f"biat_h2h_{race_id}"}],
-        [{"text": "🏆 Podium — Top favoris",         "callback_data": f"biat_pod_{race_id}"}],
+        [{"text": "⚔️ H2H — Choisir deux athlètes", "callback_data": f"biat_h2h|{race_id}"}],
+        [{"text": "🏆 Podium — Top favoris",         "callback_data": f"biat_pod|{race_id}"}],
         [{"text": "◀️ Retour",                        "callback_data": "biat_h2h_menu"}],
     ])
     send_message(f"🎿 <b>{desc}</b>\n\nQue veux-tu analyser ?", reply_markup=kb)
@@ -183,17 +183,17 @@ def handle_h2h_athletes(race_id: str, page: int = 0, chat_id: str = None):
     rows = []
     for ibu, s in slice_:
         label = f"{s['name']} {s['nat']} · #{round(s['avg_rank'],1)}"
-        rows.append([{"text": label, "callback_data": f"biat_sel_{race_id}_{ibu}"}])
+        rows.append([{"text": label, "callback_data": f"biat_sel|{race_id}|{ibu}"}])
 
     # Navigation pages
     nav = []
     if page > 0:
-        nav.append({"text": f"◀️ Préc.", "callback_data": f"biat_h2hp_{race_id}_{page-1}"})
+        nav.append({"text": f"◀️ Préc.", "callback_data": f"biat_h2hp|{race_id}|{page-1}"})
     nav.append({"text": f"{page+1}/{total_pages} · {len(top)} athlètes", "callback_data": "noop"})
     if page < total_pages - 1:
-        nav.append({"text": f"Suiv. ▶️", "callback_data": f"biat_h2hp_{race_id}_{page+1}"})
+        nav.append({"text": f"Suiv. ▶️", "callback_data": f"biat_h2hp|{race_id}|{page+1}"})
     rows.append(nav)
-    rows.append([{"text": "◀️ Retour", "callback_data": f"biat_race_{race_id}"}])
+    rows.append([{"text": "◀️ Retour", "callback_data": f"biat_race|{race_id}"}])
 
     kb = make_keyboard(rows)
     send_message(
@@ -240,13 +240,13 @@ def handle_select_a(race_id: str, ibu_a: str, chat_id: str):
     rows = []
     for ibu_b, sb in top[:PER_PAGE]:
         label = f"{sb['name']} {sb['nat']} · #{round(sb['avg_rank'],1)}"
-        rows.append([{"text": label, "callback_data": f"biat_vs_{race_id}_{ibu_a}_{ibu_b}"}])
+        rows.append([{"text": label, "callback_data": f"biat_vs|{race_id}|{ibu_a}|{ibu_b}"}])
 
     nav = [{"text": f"1/{total_pages} · {len(top)} athlètes", "callback_data": "noop"}]
     if total_pages > 1:
-        nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb_{race_id}_{ibu_a}_1"})
+        nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb|{race_id}|{ibu_a}|1"})
     rows.append(nav)
-    rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h_{race_id}"}])
+    rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h|{race_id}"}])
 
     kb = make_keyboard(rows)
     send_message(
@@ -307,7 +307,7 @@ def handle_duel(race_id: str, ibu_a: str, ibu_b: str, chat_id: str):
     )
 
     kb = make_keyboard([
-        [{"text": "🔄 Changer adversaire", "callback_data": f"biat_sel_{race_id}_{ibu_a}"}],
+        [{"text": "🔄 Changer adversaire", "callback_data": f"biat_sel|{race_id}|{ibu_a}"}],
         [{"text": "◀️ Retour courses",     "callback_data": "biat_h2h_menu"}],
     ])
     send_message(msg, reply_markup=kb)
@@ -340,16 +340,16 @@ def handle_select_b_page(race_id: str, ibu_a: str, page: int, chat_id: str):
     rows = []
     for ibu_b, sb in slice_:
         label = f"{sb['name']} {sb['nat']} · #{round(sb['avg_rank'],1)}"
-        rows.append([{"text": label, "callback_data": f"biat_vs_{race_id}_{ibu_a}_{ibu_b}"}])
+        rows.append([{"text": label, "callback_data": f"biat_vs|{race_id}|{ibu_a}|{ibu_b}"}])
 
     nav = []
     if page > 0:
-        nav.append({"text": "◀️ Préc.", "callback_data": f"biat_selb_{race_id}_{ibu_a}_{page-1}"})
+        nav.append({"text": "◀️ Préc.", "callback_data": f"biat_selb|{race_id}|{ibu_a}|{page-1}"})
     nav.append({"text": f"{page+1}/{total_pages}", "callback_data": "noop"})
     if page < total_pages - 1:
-        nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb_{race_id}_{ibu_a}_{page+1}"})
+        nav.append({"text": "Suiv. ▶️", "callback_data": f"biat_selb|{race_id}|{ibu_a}|{page+1}"})
     rows.append(nav)
-    rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h_{race_id}"}])
+    rows.append([{"text": "◀️ Rechoisir A", "callback_data": f"biat_h2h|{race_id}"}])
 
     kb = make_keyboard(rows)
     send_message(
@@ -400,7 +400,7 @@ def handle_select_b_page(race_id: str, ibu_a: str, page: int, chat_id: str):
         )
 
     kb = make_keyboard([
-        [{"text": "⚔️ Voir H2H", "callback_data": f"biat_h2h_{race_id}"}],
-        [{"text": "◀️ Retour",   "callback_data": f"biat_race_{race_id}"}],
+        [{"text": "⚔️ Voir H2H", "callback_data": f"biat_h2h|{race_id}"}],
+        [{"text": "◀️ Retour",   "callback_data": f"biat_race|{race_id}"}],
     ])
     send_message(msg, reply_markup=kb)

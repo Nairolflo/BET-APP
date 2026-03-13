@@ -218,12 +218,46 @@ def init_db():
 # BETS
 # ─────────────────────────────────────────────
 
+FR_BOOKMAKERS = {"winamax", "betclic", "unibet"}
+
+def _is_fr_bookmaker(name: str) -> bool:
+    if not name:
+        return False
+    n = name.strip().lower()
+    for bk in FR_BOOKMAKERS:
+        if n.startswith(bk):
+            rest = n[len(bk):].strip().replace("(","").replace(")","")
+            if rest in ("", "fr", "(fr)"):
+                return True
+    return False
+
+
+def purge_non_fr_bets() -> int:
+    """Supprime de la DB tous les bets dont le bookmaker n'est pas FR."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, bookmaker FROM bets")
+        rows = cur.fetchall()
+        to_delete = [row[0] for row in rows if not _is_fr_bookmaker(row[1] or "")]
+        if to_delete:
+            p = ph()
+            placeholders = ",".join([p] * len(to_delete))
+            cur.execute(f"DELETE FROM bets WHERE id IN ({placeholders})", to_delete)
+            conn.commit()
+        return len(to_delete)
+    finally:
+        conn.close()
+
+
 def save_bet(bet: dict) -> int:
     """
     Insère un bet en DB.
     Si un bet identique existe déjà (même match + marché + bookmaker),
     retourne l'ID existant sans créer de doublon.
     """
+    if not _is_fr_bookmaker(bet.get("bookmaker", "")):
+        return -1  # bookmaker non-FR, refusé silencieusement
     conn = get_connection()
     try:
         cur = conn.cursor()

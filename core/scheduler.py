@@ -97,38 +97,34 @@ def handle_callback(callback_query: dict):
     elif data == "biat_h2h_menu":
         from sports.biathlon.handlers import handle_h2h_menu
         threading.Thread(target=handle_h2h_menu, daemon=True).start()
-    elif data.startswith("biat_race_"):
-        race_id = data[len("biat_race_"):]
+    elif data.startswith("biat_race|"):
+        race_id = data.split("|", 1)[1]
         from sports.biathlon.handlers import handle_race_menu
         threading.Thread(target=handle_race_menu, args=(race_id,), daemon=True).start()
-    elif data.startswith("biat_h2hp_"):          # page athlètes
-        parts = data.split("_"); page = int(parts[-1]); rid = "_".join(parts[2:-1])
+    elif data.startswith("biat_h2hp|"):        # page N athlètes
+        _, rid, page = data.split("|")
         from sports.biathlon.handlers import handle_h2h_athletes
-        threading.Thread(target=handle_h2h_athletes, args=(rid, page, chat_id), daemon=True).start()
-    elif data.startswith("biat_h2h_"):           # page 0
-        race_id = data[len("biat_h2h_"):]
+        threading.Thread(target=handle_h2h_athletes, args=(rid, int(page), chat_id), daemon=True).start()
+    elif data.startswith("biat_h2h|"):         # page 0 athlètes
+        race_id = data.split("|", 1)[1]
         from sports.biathlon.handlers import handle_h2h_athletes
         threading.Thread(target=handle_h2h_athletes, args=(race_id, 0, chat_id), daemon=True).start()
-    elif data.startswith("biat_sel_"):
-        parts = data[len("biat_sel_"):].split("_", 1)
-        race_id, ibu_a = parts[0], parts[1]
+    elif data.startswith("biat_sel|"):          # sélection athlète A
+        _, race_id, ibu_a = data.split("|")
         from sports.biathlon.handlers import handle_select_a
         threading.Thread(target=handle_select_a, args=(race_id, ibu_a, chat_id), daemon=True).start()
-    elif data.startswith("biat_vs_"):
-        parts = data[len("biat_vs_"):].split("_", 2)
-        race_id, ibu_a, ibu_b = parts[0], parts[1], parts[2]
+    elif data.startswith("biat_vs|"):           # duel final
+        _, race_id, ibu_a, ibu_b = data.split("|")
         from sports.biathlon.handlers import handle_duel
         threading.Thread(target=handle_duel, args=(race_id, ibu_a, ibu_b, chat_id), daemon=True).start()
-    elif data.startswith("biat_selb_"):
-        # biat_selb_{race_id}_{ibu_a}_{page}
-        parts = data[len("biat_selb_"):].split("_")
-        page = int(parts[-1]); ibu_a = parts[-2]; rid = "_".join(parts[:-2])
+    elif data.startswith("biat_selb|"):         # page N athlètes B
+        _, race_id, ibu_a, page = data.split("|")
         from sports.biathlon.handlers import handle_select_b_page
-        threading.Thread(target=handle_select_b_page, args=(rid, ibu_a, page, chat_id), daemon=True).start()
+        threading.Thread(target=handle_select_b_page, args=(race_id, ibu_a, int(page), chat_id), daemon=True).start()
     elif data == "noop":
-        pass  # bouton compteur/info, rien à faire
-    elif data.startswith("biat_pod_"):
-        race_id = data[len("biat_pod_"):]
+        pass
+    elif data.startswith("biat_pod|"):
+        race_id = data.split("|", 1)[1]
         from sports.biathlon.handlers import handle_podium
         threading.Thread(target=handle_podium, args=(race_id,), daemon=True).start()
 
