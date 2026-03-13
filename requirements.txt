@@ -6,6 +6,6 @@ apscheduler>=3.10.4
 beautifulsoup4
 lxml
 psycopg2-binary
-
-"python-socketio[asyncio_client]"
+python-socketio[asyncio_client]
 aiohttp
+
