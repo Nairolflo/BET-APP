@@ -109,6 +109,10 @@ def handle_callback(callback_query: dict):
         race_id = data.split("|", 1)[1]
         from sports.biathlon.handlers import handle_h2h_athletes
         threading.Thread(target=handle_h2h_athletes, args=(race_id, 0, chat_id), daemon=True).start()
+    elif data.startswith("biat_selb|"):         # page N athlètes B — AVANT biat_sel|
+        _, race_id, ibu_a, page = data.split("|")
+        from sports.biathlon.handlers import handle_select_b_page
+        threading.Thread(target=handle_select_b_page, args=(race_id, ibu_a, int(page), chat_id), daemon=True).start()
     elif data.startswith("biat_sel|"):          # sélection athlète A
         _, race_id, ibu_a = data.split("|")
         from sports.biathlon.handlers import handle_select_a
@@ -117,10 +121,6 @@ def handle_callback(callback_query: dict):
         _, race_id, ibu_a, ibu_b = data.split("|")
         from sports.biathlon.handlers import handle_duel
         threading.Thread(target=handle_duel, args=(race_id, ibu_a, ibu_b, chat_id), daemon=True).start()
-    elif data.startswith("biat_selb|"):         # page N athlètes B
-        _, race_id, ibu_a, page = data.split("|")
-        from sports.biathlon.handlers import handle_select_b_page
-        threading.Thread(target=handle_select_b_page, args=(race_id, ibu_a, int(page), chat_id), daemon=True).start()
     elif data == "noop":
         pass
     elif data.startswith("biat_pod|"):
