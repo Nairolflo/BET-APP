@@ -245,8 +245,10 @@ def run(silent=False):
             ibu_stats = stats_cache[cache_key]
 
             if len(ibu_stats) < 4:
-                log.warning(f"[Biathlon] Pas assez de stats pour {fmt}/{gender}")
+                log.warning(f"[Biathlon] Pas assez de stats pour {fmt}/{gender} ({len(ibu_stats)} athlètes)")
                 continue
+
+            log.info(f"[Biathlon] {len(ibu_stats)} athlètes pour {fmt}/{gender}, construction H2H...")
 
             # Top athlètes de CE genre ET format — triés par avg_rank
             top = sorted(ibu_stats.items(), key=lambda x: x[1]["avg_rank"])[:10]
@@ -308,6 +310,7 @@ def run(silent=False):
             msg += "💡 <i>c.j. = cote juste modèle IBU · Comparer manuellement sur Winamax</i>"
 
         state["last_run"] = datetime.now(timezone.utc)
+        log.info(f"[Biathlon] Message prêt ({len(msg)} chars), envoi Telegram...")
         if not silent: send_message(msg)
 
     except Exception as e:

@@ -134,15 +134,17 @@ def fetch_biathlon_odds(timeout: int = 20) -> dict:
     _ws_odds = {}
 
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Dans un contexte Flask/Thread — crée un nouveau loop dans un thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, _run_client(timeout))
-                future.result(timeout=timeout + 5)
-        else:
-            loop.run_until_complete(_run_client(timeout))
+        # Toujours créer un nouveau loop isolé — compatible Flask/Thread
+        import concurrent.futures
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_run_client(timeout))
+            finally:
+                loop.close()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_run).result(timeout=timeout + 5)
     except Exception as e:
         log.warning(f"[Winamax WS] fetch_biathlon_odds: {e}")
 
