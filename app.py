@@ -2,7 +2,7 @@
 app.py - Flask web interface ValueBet Bot
 """
 import os
-from flask import Flask, render_template, jsonify, redirect
+from flask import Flask, render_template, jsonify
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -139,85 +139,91 @@ def api_quota():
 
 
 
-
-# ─────────────────────────────────────────────
-# BIATHLON ROUTES
-# ─────────────────────────────────────────────
-
-@app.route("/biathlon")
-def biathlon_live():
-    """Page principale biathlon — H2H, vainqueur, podium, calendrier."""
-    try:
-        import sys, os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "biathlon"))
-        from biathlon.biathlon_client import get_upcoming_races
-        upcoming = get_upcoming_races(days_ahead=10)
-    except Exception:
-        upcoming = []
-
-    # Bets biathlon depuis la DB
-    try:
-        from database import get_connection, ph, rows_to_dicts
-        conn = get_connection()
-        cur  = conn.cursor()
-        cur.execute("""
-            SELECT * FROM biathlon_bets
-            ORDER BY created_at DESC LIMIT 100
-        """)
-        bets = rows_to_dicts(cur, cur.fetchall())
-        conn.close()
-    except Exception:
-        bets = []
-
-    h2h_bets     = [b for b in bets if b.get("bet_type") == "H2H"]
-    winner_bets  = [b for b in bets if b.get("bet_type") == "WINNER"]
-    top3_bets    = [b for b in bets if b.get("bet_type") == "TOP3"]
-
-    # Stats globales biathlon
-    total   = len([b for b in bets if b.get("result") != "PENDING"])
-    wins    = len([b for b in bets if b.get("result") == "WIN"])
-    losses  = len([b for b in bets if b.get("result") == "LOSS"])
-    pending = len([b for b in bets if b.get("result") == "PENDING"])
-    win_rate = round(wins / total * 100, 1) if total else 0
-    roi      = round((wins * 1.8 - losses) / total * 100, 1) if total else 0  # approx
-
-    return render_template("biathlon.html",
-        h2h_bets        = h2h_bets,
-        winner_bets     = winner_bets,
-        top3_predictions= [],   # rempli par le worker
-        upcoming_races  = upcoming,
-        stats           = {
-            "total": total, "wins": wins, "losses": losses,
-            "pending": pending, "win_rate": win_rate, "roi": roi
-        }
-    )
-
-@app.route("/biathlon/h2h")
-def biathlon_h2h():
-    return redirect("/biathlon")
-
-@app.route("/biathlon/podium")
-def biathlon_podium():
-    return redirect("/biathlon")
-
-@app.route("/biathlon/stats")
-def biathlon_stats():
-    return redirect("/biathlon")
-
-@app.route("/api/biathlon/bets")
-def api_biathlon_bets():
-    try:
-        from database import get_connection, rows_to_dicts
-        conn = get_connection()
-        cur  = conn.cursor()
-        cur.execute("SELECT * FROM biathlon_bets ORDER BY created_at DESC LIMIT 200")
-        bets = rows_to_dicts(cur, cur.fetchall())
-        conn.close()
-        return jsonify(bets)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 if __name__ == "__main__":
     init_db()
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
+
+# ─── Biathlon ────────────────────────────────────────────────────────────────
+
+@app.route("/biathlon")
+def biathlon_page():
+    return render_template("biathlon.html")
+
+@app.route("/api/biathlon/races")
+def api_biathlon_races():
+    from sports.biathlon.biathlon_client import get_upcoming_races, preload_competitions, CURRENT_SEASON, PREV_SEASON
+    try:
+        preload_competitions(CURRENT_SEASON)
+        preload_competitions(PREV_SEASON)
+        races = [r for r in get_upcoming_races(days_ahead=21)
+                 if r.get("format") not in ("RL","SR","MX")]
+        return jsonify({"races": races, "count": len(races)})
+    except Exception as e:
+        return jsonify({"races": [], "error": str(e), "count": 0})
+
+@app.route("/api/biathlon/athletes")
+def api_biathlon_athletes():
+    from sports.biathlon.handlers import _get_race_stats
+    race_id = request.args.get("race_id","")
+    try:
+        cached = _get_race_stats(race_id)
+        stats  = cached["stats"]
+        athletes = [
+            {"ibu": ibu, "name": s["name"], "nat": s["nat"],
+             "avg_rank": round(s["avg_rank"], 1),
+             "prone_acc": s["prone_acc"], "standing_acc": s["standing_acc"],
+             "top3_rate": s["top3_rate"], "n_races": s["n_races"]}
+            for ibu, s in sorted(stats.items(), key=lambda x: x[1]["avg_rank"])
+        ]
+        return jsonify({"athletes": athletes})
+    except Exception as e:
+        return jsonify({"athletes": [], "error": str(e)})
+
+@app.route("/api/biathlon/duel")
+def api_biathlon_duel():
+    from sports.biathlon.handlers import _get_race_stats, _calc
+    race_id = request.args.get("race_id","")
+    ibu_a   = request.args.get("ibu_a","")
+    ibu_b   = request.args.get("ibu_b","")
+    try:
+        cached = _get_race_stats(race_id)
+        stats  = cached["stats"]
+        fmt    = cached["fmt"]
+        sa, sb = stats[ibu_a], stats[ibu_b]
+        pa, pb = _calc(sa, sb, fmt)
+        return jsonify({
+            "name_a": sa["name"], "nat_a": sa["nat"],
+            "name_b": sb["name"], "nat_b": sb["nat"],
+            "prob_a": round(pa, 4), "prob_b": round(pb, 4),
+            "cote_a": round(1/pa, 2), "cote_b": round(1/pb, 2),
+            "prone_a": sa["prone_acc"], "prone_b": sb["prone_acc"],
+            "stand_a": sa["standing_acc"], "stand_b": sb["standing_acc"],
+            "rank_a": round(sa["avg_rank"], 1), "rank_b": round(sb["avg_rank"], 1),
+            "top3_a": sa["top3_rate"], "top3_b": sb["top3_rate"],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/biathlon/podium")
+def api_biathlon_podium():
+    from sports.biathlon.handlers import _get_race_stats
+    from sports.biathlon.jobs import calc_rating
+    race_id = request.args.get("race_id","")
+    try:
+        cached = _get_race_stats(race_id)
+        stats  = cached["stats"]
+        fmt    = cached["fmt"]
+        top    = sorted(stats.items(), key=lambda x: -calc_rating(x[1], fmt))[:8]
+        total  = sum(calc_rating(s, fmt) for _, s in top)
+        podium = [{
+            "name": s["name"], "nat": s["nat"],
+            "pct": round(calc_rating(s, fmt)/total*100),
+            "rank": round(s["avg_rank"], 1),
+            "prone": s["prone_acc"], "stand": s["standing_acc"],
+            "top3": s["top3_rate"],
+        } for _, s in top]
+        return jsonify({"podium": podium})
+    except Exception as e:
+        return jsonify({"podium": [], "error": str(e)}), 500
