@@ -168,7 +168,7 @@ def handle_h2h_athletes(race_id: str, page: int = 0, chat_id: str = None):
     try:
         _send_athlete_list(race_id, page, chat_id,
                            title="👤 Choisir l'athlète A",
-                           cb_prefix=f"biat_h2hp|{race_id}",
+                           cb_prefix="biat_h2hp",
                            cb_select="biat_sel")
     except Exception as e:
         from core.telegram import send_message
