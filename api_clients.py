@@ -118,6 +118,42 @@ def _odds_rate_limit():
         time.sleep(ODDS_MIN_INTERVAL - elapsed)
     _odds_last_call = time.time()
 
+# ─── Rotation clés Odds API ───────────────────────────────────────────────────
+import itertools as _itertools
+
+def _get_odds_api_keys() -> list:
+    """Lit toutes les clés ODDS_API_KEY, ODDS_API_KEY_2, ODDS_API_KEY_3..."""
+    keys = []
+    k = os.getenv("ODDS_API_KEY", "")
+    if k: keys.append(k)
+    for i in range(2, 10):
+        k = os.getenv(f"ODDS_API_KEY_{i}", "")
+        if k: keys.append(k)
+    return keys
+
+_api_keys     = _get_odds_api_keys()
+_key_cycle    = _itertools.cycle(_api_keys) if _api_keys else iter([""])
+_current_key  = next(_key_cycle) if _api_keys else ""
+_key_exhausted = set()  # clés épuisées (429)
+
+def _get_active_key() -> str:
+    global _current_key
+    return _current_key
+
+def _rotate_key(exhausted_key: str = None):
+    global _current_key, _api_keys, _key_cycle
+    if exhausted_key:
+        _key_exhausted.add(exhausted_key)
+        log.warning(f"[API] Clé épuisée, rotation → clé suivante ({len(_key_exhausted)}/{len(_api_keys)} épuisées)")
+    available = [k for k in _api_keys if k not in _key_exhausted]
+    if not available:
+        log.error("[API] Toutes les clés Odds API sont épuisées !")
+        return
+    _key_cycle   = _itertools.cycle(available)
+    _current_key = next(_key_cycle)
+
+
+
 LEAGUE_SPORT_MAP = {
     39:  "soccer_epl",
     61:  "soccer_france_ligue_one",
@@ -274,7 +310,7 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 10) -> list:
 
     url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
     params = {
-        "apiKey":     os.getenv("ODDS_API_KEY", ""),
+        "apiKey":     _get_active_key(),
         "regions":    "eu,fr",
         "markets":    "h2h",
         "oddsFormat": "decimal",
@@ -286,6 +322,8 @@ def get_fixtures(league_id: int, season: int, days_ahead: int = 10) -> list:
         _update_odds_quota(resp.headers)
         events = resp.json()
     except Exception as e:
+        if "429" in str(e):
+            _rotate_key(_get_active_key())
         print(f"[get_fixtures] Erreur league {league_id}: {e}")
         return []
 
@@ -327,7 +365,7 @@ def get_odds(league_id: int) -> list:
 
     url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
     params = {
-        "apiKey":     os.getenv("ODDS_API_KEY", ""),
+        "apiKey":     _get_active_key(),
         "regions":    "eu,fr",
         "markets":    "h2h,totals",
         "oddsFormat": "decimal",
@@ -339,6 +377,8 @@ def get_odds(league_id: int) -> list:
         _update_odds_quota(resp.headers)
         events = resp.json()
     except Exception as e:
+        if "429" in str(e):
+            _rotate_key(_get_active_key())
         print(f"[get_odds] Erreur league {league_id}: {e}")
         return []
 
