@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Stats Biathlon — ValueBet{% endblock %}
+{% block content %}
+<style>
+  .bstat-wrap { max-width: 1100px; margin: 0 auto; padding: 2rem; font-family: 'Inter', sans-serif; }
+  .bstat-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+  .bstat-header h1 { font-size: 2rem; font-weight: 800; }
+  .tag { background: #00d4aa22; color: #00d4aa; border: 1px solid #00d4aa44; border-radius: 6px; padding: .2rem .7rem; font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 2rem; border-bottom: 1px solid var(--border); padding-bottom: .8rem; }
+  .tab { padding: .4rem 1rem; border-radius: 8px; cursor: pointer; font-size: .85rem; font-weight: 600; border: 1px solid transparent; transition: all .15s; color: var(--text-dim); }
+  .tab:hover { background: var(--surface2); color: var(--text); }
+  .tab.active { background: #6c63ff22; border-color: #6c63ff44; color: #6c63ff; }
+
+  /* KPIs */
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; text-align: center; }
+  .kpi .val { font-size: 2rem; font-weight: 800; font-family: 'Bebas Neue', sans-serif; }
+  .kpi .lbl { font-size: .72rem; color: var(--text-dim); margin-top: .3rem; text-transform: uppercase; letter-spacing: 1px; }
+  .kpi.green .val { color: #00d4aa; }
+  .kpi.purple .val { color: #6c63ff; }
+  .kpi.red .val { color: #ff4d6d; }
+  .kpi.yellow .val { color: #ffd166; }
+
+  /* Bar */
+  .bar-wrap { background: var(--surface2); border-radius: 4px; height: 6px; overflow: hidden; margin-top: .4rem; }
+  .bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(to right, #6c63ff, #00d4aa); transition: width .6s ease; }
+
+  /* Table */
+  .data-table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
+  .data-table th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); padding: .6rem .8rem; border-bottom: 1px solid var(--border); }
+  .data-table td { padding: .65rem .8rem; border-bottom: 1px solid var(--border); font-size: .85rem; }
+  .data-table tr:hover td { background: var(--surface2); }
+
+  .badge-win  { background:#00d4aa22; color:#00d4aa; border:1px solid #00d4aa44; border-radius:5px; padding:.15rem .45rem; font-size:.72rem; }
+  .badge-loss { background:#ff4d6d22; color:#ff4d6d; border:1px solid #ff4d6d44; border-radius:5px; padding:.15rem .45rem; font-size:.72rem; }
+  .badge-pend { background:#8b8fa822; color:#8b8fa8; border:1px solid #8b8fa844; border-radius:5px; padding:.15rem .45rem; font-size:.72rem; }
+  .fmt-badge  { border-radius:4px; padding:.1rem .4rem; font-size:.7rem; font-weight:700; }
+  .fmt-SP { background:#ffd16622; color:#ffd166; }
+  .fmt-PU { background:#6c63ff22; color:#6c63ff; }
+  .fmt-MS { background:#ff4d6d22; color:#ff4d6d; }
+  .fmt-IN { background:#00d4aa22; color:#00d4aa; }
+
+  .section-title { font-size: 1rem; font-weight: 700; margin: 1.5rem 0 .8rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; font-size: .78rem; }
+  .empty { color: var(--text-dim); text-align: center; padding: 2rem; }
+  .loader { display: flex; align-items: center; gap: .8rem; color: var(--text-dim); padding: 3rem; justify-content: center; }
+  .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: #6c63ff; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<div class="bstat-wrap">
+  <div class="bstat-header">
+    <h1>🎿 Stats Biathlon</h1>
+    <span class="tag">H2H</span>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs" id="tabs">
+    <div class="tab active" onclick="showTab('all')">🌍 Global</div>
+    <div class="tab" onclick="showTab('SP')">⚡ Sprint</div>
+    <div class="tab" onclick="showTab('PU')">🔄 Poursuite</div>
+    <div class="tab" onclick="showTab('MS')">🏁 Mass Start</div>
+    <div class="tab" onclick="showTab('IN')">📏 Individuelle</div>
+  </div>
+
+  <div id="loader" class="loader"><div class="spinner"></div> Chargement...</div>
+  <div id="content" style="display:none">
+    <div id="tab-content"></div>
+  </div>
+</div>
+
+<script>
+let allData = null;
+let currentTab = 'all';
+
+async function load() {
+  try {
+    const res  = await fetch('/api/biathlon/stats');
+    allData    = await res.json();
+    document.getElementById('loader').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+    showTab('all');
+  } catch(e) {
+    document.getElementById('loader').innerHTML = `<p style="color:#ff4d6d">❌ ${e.message}</p>`;
+  }
+}
+
+function showTab(fmt) {
+  currentTab = fmt;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  const idx = ['all','SP','PU','MS','IN'].indexOf(fmt);
+  document.querySelectorAll('.tab')[idx]?.classList.add('active');
+
+  const bets = fmt === 'all'
+    ? allData.bets
+    : allData.bets.filter(b => b.race_format === fmt);
+
+  renderTab(bets, fmt);
+}
+
+function kpiHtml(bets) {
+  const total   = bets.length;
+  const won     = bets.filter(b => b.result === 1).length;
+  const lost    = bets.filter(b => b.result === 0).length;
+  const pending = bets.filter(b => b.result === -1).length;
+  const resolved = won + lost;
+  const wr = resolved > 0 ? Math.round(won / resolved * 100) : 0;
+  const wrClass = wr >= 55 ? 'green' : wr >= 45 ? 'yellow' : 'red';
+
+  return `<div class="kpi-grid">
+    <div class="kpi purple"><div class="val">${total}</div><div class="lbl">Paris total</div></div>
+    <div class="kpi green"><div class="val">${won}</div><div class="lbl">Gagnés</div></div>
+    <div class="kpi red"><div class="val">${lost}</div><div class="lbl">Perdus</div></div>
+    <div class="kpi yellow"><div class="val">${pending}</div><div class="lbl">En attente</div></div>
+    <div class="kpi ${wrClass}">
+      <div class="val">${wr}%</div><div class="lbl">Taux réussite</div>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${wr}%"></div></div>
+    </div>
+  </div>`;
+}
+
+function byRaceHtml(bets) {
+  const races = {};
+  bets.forEach(b => {
+    const k = b.race_id;
+    if (!races[k]) races[k] = {name: b.race_name, date: b.race_date, fmt: b.race_format, won:0, lost:0, pending:0};
+    if      (b.result === 1)  races[k].won++;
+    else if (b.result === 0)  races[k].lost++;
+    else                      races[k].pending++;
+  });
+
+  const rows = Object.values(races).sort((a,b) => b.date.localeCompare(a.date));
+  if (!rows.length) return '<p class="empty">Aucune donnée</p>';
+
+  return `<div class="section-title">📅 Par course</div>
+  <div style="overflow-x:auto"><table class="data-table">
+    <thead><tr><th>Course</th><th>Format</th><th>Date</th><th>Paris</th><th>✅</th><th>❌</th><th>⏳</th><th>Taux</th></tr></thead>
+    <tbody>${rows.map(r => {
+      const total = r.won + r.lost + r.pending;
+      const res   = r.won + r.lost;
+      const wr    = res > 0 ? Math.round(r.won/res*100) : null;
+      return `<tr>
+        <td>${r.name || r.date}</td>
+        <td><span class="fmt-badge fmt-${r.fmt}">${r.fmt}</span></td>
+        <td style="color:var(--text-dim)">${r.date}</td>
+        <td><strong>${total}</strong></td>
+        <td style="color:#00d4aa">${r.won}</td>
+        <td style="color:#ff4d6d">${r.lost}</td>
+        <td style="color:#8b8fa8">${r.pending}</td>
+        <td>${wr !== null
+          ? `${wr}%<div class="bar-wrap"><div class="bar-fill" style="width:${wr}%"></div></div>`
+          : '—'}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+function betListHtml(bets) {
+  if (!bets.length) return '<p class="empty">Aucun pari</p>';
+  return `<div class="section-title">⚔️ Détail paris</div>
+  <div style="overflow-x:auto"><table class="data-table">
+    <thead><tr><th>Course</th><th>Format</th><th>Date</th><th>Pick</th><th>Adversaire</th><th>Proba</th><th>Cote juste</th><th>Résultat</th></tr></thead>
+    <tbody>${bets.map(b => `<tr>
+      <td style="font-size:.8rem">${b.race_name || b.race_id}</td>
+      <td><span class="fmt-badge fmt-${b.race_format}">${b.race_format}</span></td>
+      <td style="color:var(--text-dim);font-size:.8rem">${b.race_date}</td>
+      <td><strong>${b.pick}</strong></td>
+      <td style="color:var(--text-dim)">${b.opponent}</td>
+      <td>${b.prob_model > 0 ? Math.round(b.prob_model*100)+'%' : '—'}</td>
+      <td style="color:#ffd166">${b.odd > 0 ? b.odd : '—'}</td>
+      <td>${b.result===1 ? '<span class="badge-win">✅ Gagné</span>'
+          : b.result===0 ? '<span class="badge-loss">❌ Perdu</span>'
+          : '<span class="badge-pend">⏳</span>'}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+function renderTab(bets, fmt) {
+  document.getElementById('tab-content').innerHTML =
+    kpiHtml(bets) + byRaceHtml(bets) + betListHtml(bets);
+}
+
+load();
+</script>
+{% endblock %}
