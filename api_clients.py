@@ -1022,6 +1022,100 @@ def get_fixtures_results_batch(league_id: int, season: int, date: str) -> dict:
     return results
 
 
+
+
+def calc_btts_prob(home_team: str, away_team: str, league_id: int,
+                   home_form: dict = None, away_form: dict = None,
+                   match_date: str = None) -> dict:
+    """
+    Calcule la probabilité BTTS (Both Teams To Score).
+
+    Modèle :
+      P(home marque) = f(avg_scored_home, avg_conceded_away)
+      P(away marque) = f(avg_scored_away, avg_conceded_home)
+      P(BTTS) = P(home marque) × P(away marque)
+      Ajustement H2H : pondération 70% modèle / 30% taux H2H observé
+    """
+    import math
+
+    # ── Forme récente ────────────────────────────────────────────────────────
+    h_scored    = home_form.get("avg_scored",   1.3) if home_form else 1.3
+    h_conceded  = home_form.get("avg_conceded", 1.1) if home_form else 1.1
+    a_scored    = away_form.get("avg_scored",   1.1) if away_form else 1.1
+    a_conceded  = away_form.get("avg_conceded", 1.3) if away_form else 1.3
+
+    # ── Probabilité de marquer via Poisson ───────────────────────────────────
+    # Lambda = moyenne buts attendus = (attaque équipe × défense adverse) / 2
+    lam_home = (h_scored + a_conceded) / 2
+    lam_away = (a_scored + h_conceded) / 2
+
+    # P(marquer au moins 1) = 1 - P(0 but) = 1 - e^(-lambda)
+    p_home_scores = 1 - math.exp(-lam_home)
+    p_away_scores = 1 - math.exp(-lam_away)
+    p_btts_model  = p_home_scores * p_away_scores
+
+    # ── H2H historique ────────────────────────────────────────────────────────
+    h2h_matches = []
+    try:
+        h_norm = normalize_team_name(home_team)
+        a_norm = normalize_team_name(away_team)
+        current_season = int(os.getenv("SEASON", 2025))
+        all_matches = prefetch_season_matches(league_id, [current_season, current_season-1])
+        for m in all_matches:
+            fd_home = m.get("home_norm") or normalize_team_name(m["home_name"])
+            fd_away = m.get("away_norm") or normalize_team_name(m["away_name"])
+            is_match = (
+                (fd_home == h_norm or h_norm in fd_home or fd_home in h_norm) and
+                (fd_away == a_norm or a_norm in fd_away or fd_away in a_norm)
+            ) or (
+                (fd_home == a_norm or a_norm in fd_home or fd_home in a_norm) and
+                (fd_away == h_norm or h_norm in fd_away or fd_away in h_norm)
+            )
+            if not is_match: continue
+            if match_date and m["date"] >= match_date: continue
+            h2h_matches.append(m)
+    except Exception:
+        pass
+
+    btts_h2h     = None
+    h2h_detail   = []
+    if len(h2h_matches) >= 3:
+        btts_count = sum(1 for m in h2h_matches
+                        if m.get("home_goals",0) > 0 and m.get("away_goals",0) > 0)
+        btts_h2h   = btts_count / len(h2h_matches)
+        # Détail des derniers matchs H2H pour affichage
+        for m in sorted(h2h_matches, key=lambda x: x["date"], reverse=True)[:5]:
+            hg = m.get("home_goals", 0); ag = m.get("away_goals", 0)
+            h2h_detail.append({
+                "date":  m["date"],
+                "home":  m.get("home_name",""),
+                "away":  m.get("away_name",""),
+                "score": f"{hg}-{ag}",
+                "btts":  hg > 0 and ag > 0,
+            })
+
+    # ── Probabilité finale ────────────────────────────────────────────────────
+    if btts_h2h is not None:
+        # Pondération 70% modèle Poisson / 30% taux H2H observé
+        p_btts_final = 0.70 * p_btts_model + 0.30 * btts_h2h
+    else:
+        p_btts_final = p_btts_model
+
+    cote_juste   = round(1 / p_btts_final, 2) if p_btts_final > 0 else 99
+
+    return {
+        "p_btts":          round(p_btts_final, 4),
+        "p_btts_model":    round(p_btts_model, 4),
+        "p_btts_h2h":      round(btts_h2h, 4) if btts_h2h is not None else None,
+        "p_home_scores":   round(p_home_scores, 4),
+        "p_away_scores":   round(p_away_scores, 4),
+        "lam_home":        round(lam_home, 3),
+        "lam_away":        round(lam_away, 3),
+        "cote_juste":      cote_juste,
+        "h2h_matches":     len(h2h_matches),
+        "h2h_detail":      h2h_detail,
+    }
+
 def get_all_results_today(date: str) -> dict:
     key = os.getenv("FOOTBALLDATA_KEY", "")
     if not key:
