@@ -367,7 +367,7 @@ def get_odds(league_id: int) -> list:
     params = {
         "apiKey":     _get_active_key(),
         "regions":    "eu,fr",
-        "markets":    "h2h,totals",
+        "markets":    "h2h,totals,btts",
         "oddsFormat": "decimal",
     }
     try:
@@ -411,6 +411,12 @@ def get_odds(league_id: int) -> list:
                             entry[f"over_{suffix}"] = price
                         elif name.lower() == "under":
                             entry[f"under_{suffix}"] = price
+                elif mkt_key == "btts":
+                    for o in mkt.get("outcomes", []):
+                        name  = o.get("name", "").lower()
+                        price = o.get("price")
+                        if price and name in ("yes", "oui"):
+                            entry["btts"] = price
             if entry:
                 all_bk[bk_name] = entry
                 bk_key = bk.get("key", "")
