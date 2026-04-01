@@ -43,8 +43,8 @@ SCHEDULER_HOUR  = int(os.getenv("SCHEDULER_HOUR", 8))
 
 
 def refresh_team_stats(silent=False):
-    from database import save_team_stats
-    from api_clients import get_team_standings
+    from core.database import save_team_stats
+    from core.api_clients import get_team_standings
     from core.telegram import send_message
 
     log.info("Refresh stats equipes...")
@@ -68,7 +68,7 @@ def refresh_team_stats(silent=False):
 
 def smart_run(silent=False):
     """Vérifie si des matchs existent avant de consommer le quota."""
-    from api_clients import get_fixtures
+    from core.api_clients import get_fixtures
     from core.telegram import send_message
 
     today      = datetime.now(timezone.utc).date()
@@ -98,17 +98,17 @@ def smart_run(silent=False):
 
 def run(silent=False):
     """Moteur principal value bet foot."""
-    from database import (
+    from core.database import (
         save_bet, get_team_stats, save_team_stats,
         is_bet_notified, mark_bet_notified, delete_today_pending_bets,
     )
-    from api_clients import (
+    from core.api_clients import (
         get_odds_quota, odds_quota_ok, clear_odds_cache,
         get_fixtures, get_odds, get_team_standings,
         normalize_team_name, get_h2h, clear_h2h_cache,
         get_recent_form, clear_form_cache, FOOTBALLDATA_LEAGUE_MAP,
     )
-    from model import (
+    from sports.football.model import (
         calc_league_averages, calc_attack_defense_strength,
         predict_match, find_value_bets,
     )
@@ -236,7 +236,7 @@ def run(silent=False):
             # BTTS
             btts_data = None
             try:
-                from api_clients import calc_btts_prob
+                from core.api_clients import calc_btts_prob
                 btts_data = calc_btts_prob(
                     home_name, away_name, league_id,
                     home_form=home_form, away_form=away_form,
@@ -258,7 +258,7 @@ def run(silent=False):
 
             for bet in value_bets:
                 try:
-                    from database import save_bet
+                    from core.database import save_bet
                     bet_id = save_bet({
                         "match_date": fix["date"],
                         "league":     league_name,
@@ -277,9 +277,11 @@ def run(silent=False):
     state["running"]    = False
 
     try:
-        from api_clients import get_odds_api_usage
-        remaining  = get_odds_api_usage().get("remaining", "?")
-        quota_line = f"\n📡 Quota : <b>{remaining}</b> req. restantes"
+        from core.api_clients import get_odds_api_usage
+        quota      = get_odds_api_usage()
+        remaining  = quota.get("remaining", "?")
+        used_run   = quota.get("used", "?")
+        quota_line = f"\n📡 Quota : <b>{remaining}</b> restantes · <b>{used_run}</b> utilisées ce run"
     except Exception:
         quota_line = ""
 
@@ -290,8 +292,8 @@ def run(silent=False):
 
 def check_results(silent=False):
     """Vérifie les résultats des bets en attente."""
-    from database import get_pending_bets, update_bet_result
-    from api_clients import (
+    from core.database import get_pending_bets, update_bet_result
+    from core.api_clients import (
         get_all_results_today, get_fixtures_results_batch, normalize_team_name,
     )
     from core.telegram import send_message
