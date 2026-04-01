@@ -147,21 +147,63 @@
         {% set over_markets = by_market | rejectattr("market", "equalto", "Home Win") | rejectattr("market", "equalto", "Away Win") | rejectattr("market", "equalto", "Bête Noire") | list %}
 
         {% if over_markets %}
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;margin-bottom:1.5rem">
-        {% for m in over_markets %}
-        <div class="card" style="border-top:3px solid var(--yellow)">
-            <div class="card-title">⚽ {{ m.market }}</div>
-            <div style="font-size:2rem;font-weight:800;color:{% if m.roi > 0 %}var(--success){% else %}var(--fail){% endif %};margin-bottom:.5rem">
-                {% if m.roi > 0 %}+{% endif %}{{ m.roi }}%
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;margin-bottom:1.5rem">
+        {% for m in by_market %}
+        <div class="card" style="border-top:3px solid {% if m.roi > 0 %}var(--success){% else %}var(--fail){% endif %};position:relative">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
+                <span style="background:{% if m.roi > 0 %}#00c47722{% else %}#ff4d6d22{% endif %};color:{% if m.roi > 0 %}var(--success){% else %}var(--fail){% endif %};border:1px solid {% if m.roi > 0 %}#00c47744{% else %}#ff4d6d44{% endif %};border-radius:20px;padding:.2rem .7rem;font-size:.78rem;font-weight:700">
+                    ROI {% if m.roi > 0 %}+{% endif %}{{ m.roi }}%
+                </span>
+                <span style="font-size:.72rem;color:var(--text-dim)">{{ m.wins or 0 }}W {{ m.losses or 0 }}L</span>
             </div>
-            <div class="progress mb1">
-                <div class="progress-bar" style="width:{{ [m.win_rate,100]|min }}%;background:{% if m.win_rate >= 55 %}var(--success){% elif m.win_rate >= 45 %}var(--yellow){% else %}var(--fail){% endif %}"></div>
+            <div class="card-title" style="margin-bottom:1rem;font-size:.9rem">
+                {% if "BTTS" in m.market or "deux" in m.market %}🤝
+                {% elif "Over" in m.market or "Plus" in m.market %}⬆️
+                {% elif "Under" in m.market or "Moins" in m.market %}⬇️
+                {% elif "Home" in m.market %}🏠
+                {% elif "Away" in m.market %}✈️
+                {% elif "Noire" in m.market %}🔥
+                {% else %}⚽{% endif %}
+                {{ m.market }}
             </div>
-            <p style="font-size:.78rem;color:var(--text-dim)">
-                WR <strong style="color:var(--text)">{{ m.win_rate }}%</strong> ·
-                {{ m.wins or 0 }}W/{{ m.losses or 0 }}L/{{ m.pending or 0 }}⏳ ·
-                Cote {{ m.avg_odds }}
-            </p>
+            <table style="width:100%;font-size:.8rem;border-collapse:collapse">
+                <tr>
+                    <td style="color:var(--text-dim);padding:.15rem 0">En cours</td>
+                    <td style="text-align:right;font-weight:600">{{ m.pending or 0 }}</td>
+                </tr>
+                <tr>
+                    <td style="color:var(--text-dim);padding:.15rem 0">Terminés</td>
+                    <td style="text-align:right;font-weight:600">{{ (m.wins or 0) + (m.losses or 0) }}</td>
+                </tr>
+                <tr>
+                    <td style="color:var(--text-dim);padding:.15rem 0">Réussite (%)</td>
+                    <td style="text-align:right;font-weight:700;color:{% if m.win_rate >= 55 %}var(--success){% elif m.win_rate >= 45 %}var(--yellow){% else %}var(--fail){% endif %}">{{ m.win_rate }}</td>
+                </tr>
+                <tr>
+                    <td style="color:var(--text-dim);padding:.15rem 0">Cote moyenne</td>
+                    <td style="text-align:right;font-weight:600">{{ m.avg_odds }}</td>
+                </tr>
+                <tr>
+                    <td style="color:var(--text-dim);padding:.15rem 0">Série réussite moy.</td>
+                    <td style="text-align:right;font-weight:600">{{ m.streak_win or "—" }}</td>
+                </tr>
+                <tr>
+                    <td style="color:var(--text-dim);padding:.15rem 0">Série échec moy.</td>
+                    <td style="text-align:right;font-weight:600">{{ m.streak_loss or "—" }}</td>
+                </tr>
+            </table>
+            <!-- Série actuelle -->
+            <div style="margin-top:.8rem;display:flex;align-items:center;gap:.3rem">
+                <span style="font-size:.72rem;color:var(--text-dim);margin-right:.3rem">Série actuelle</span>
+                {% set streak = m.streak_cur or 0 %}
+                {% if streak > 0 %}
+                    {% for i in range([streak,6]|min) %}<span style="width:14px;height:14px;background:var(--success);border-radius:3px;display:inline-block"></span>{% endfor %}
+                {% elif streak < 0 %}
+                    {% for i in range([streak|abs,6]|min) %}<span style="width:14px;height:14px;background:var(--fail);border-radius:3px;display:inline-block"></span>{% endfor %}
+                {% else %}
+                    <span style="color:var(--text-dim);font-size:.75rem">—</span>
+                {% endif %}
+            </div>
         </div>
         {% endfor %}
         </div>

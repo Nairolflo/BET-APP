@@ -629,15 +629,55 @@ def get_stats_by_market() -> list:
             ORDER BY total DESC
         """)
         rows = rows_to_dicts(cur, cur.fetchall())
+        # Calcul séries par marché
+        cur.execute(f"""
+            SELECT market, success
+            FROM ({dedup}) u
+            WHERE success != -1
+            ORDER BY market, id
+        """)
+        series_rows = cur.fetchall()
+
+        # Grouper par marché
+        from collections import defaultdict
+        market_results = defaultdict(list)
+        for row in series_rows:
+            market_results[row[0]].append(row[1])
+
+        def calc_series(results):
+            if not results: return 0, 0, 0
+            # Série actuelle
+            current = 1
+            for i in range(len(results)-1, 0, -1):
+                if results[i] == results[i-1]: current += 1
+                else: break
+            current = current if results[-1] == 1 else -current
+            # Séries moyennes
+            win_streaks, loss_streaks = [], []
+            streak, streak_type = 1, results[0]
+            for i in range(1, len(results)):
+                if results[i] == streak_type: streak += 1
+                else:
+                    (win_streaks if streak_type == 1 else loss_streaks).append(streak)
+                    streak, streak_type = 1, results[i]
+            (win_streaks if streak_type == 1 else loss_streaks).append(streak)
+            avg_win  = round(sum(win_streaks)/len(win_streaks), 2)  if win_streaks  else 0
+            avg_loss = round(sum(loss_streaks)/len(loss_streaks), 2) if loss_streaks else 0
+            return current, avg_win, avg_loss
+
         result = []
         for r in rows:
             settled = max((r.get("total") or 0) - (r.get("pending") or 0), 1)
             wins    = r.get("wins") or 0
             losses  = r.get("losses") or 0
+            current, avg_win, avg_loss = calc_series(market_results.get(r["market"], []))
             result.append({
                 **r,
-                "win_rate": round(wins / settled * 100, 1),
-                "roi":      round((wins - losses) / settled * 100, 1),
+                "win_rate":    round(wins / settled * 100, 1),
+                "roi":         round((wins - losses) / settled * 100, 1),
+                "streak_cur":  current,
+                "streak_win":  avg_win,
+                "streak_loss": avg_loss,
             })
         return result
     finally:
@@ -671,15 +711,55 @@ def get_stats_by_league_detailed() -> list:
             ORDER BY total DESC
         """)
         rows = rows_to_dicts(cur, cur.fetchall())
+        # Calcul séries par marché
+        cur.execute(f"""
+            SELECT market, success
+            FROM ({dedup}) u
+            WHERE success != -1
+            ORDER BY market, id
+        """)
+        series_rows = cur.fetchall()
+
+        # Grouper par marché
+        from collections import defaultdict
+        market_results = defaultdict(list)
+        for row in series_rows:
+            market_results[row[0]].append(row[1])
+
+        def calc_series(results):
+            if not results: return 0, 0, 0
+            # Série actuelle
+            current = 1
+            for i in range(len(results)-1, 0, -1):
+                if results[i] == results[i-1]: current += 1
+                else: break
+            current = current if results[-1] == 1 else -current
+            # Séries moyennes
+            win_streaks, loss_streaks = [], []
+            streak, streak_type = 1, results[0]
+            for i in range(1, len(results)):
+                if results[i] == streak_type: streak += 1
+                else:
+                    (win_streaks if streak_type == 1 else loss_streaks).append(streak)
+                    streak, streak_type = 1, results[i]
+            (win_streaks if streak_type == 1 else loss_streaks).append(streak)
+            avg_win  = round(sum(win_streaks)/len(win_streaks), 2)  if win_streaks  else 0
+            avg_loss = round(sum(loss_streaks)/len(loss_streaks), 2) if loss_streaks else 0
+            return current, avg_win, avg_loss
+
         result = []
         for r in rows:
             settled = max((r.get("total") or 0) - (r.get("pending") or 0), 1)
             wins    = r.get("wins") or 0
             losses  = r.get("losses") or 0
+            current, avg_win, avg_loss = calc_series(market_results.get(r["market"], []))
             result.append({
                 **r,
-                "win_rate": round(wins / settled * 100, 1),
-                "roi":      round((wins - losses) / settled * 100, 1),
+                "win_rate":    round(wins / settled * 100, 1),
+                "roi":         round((wins - losses) / settled * 100, 1),
+                "streak_cur":  current,
+                "streak_win":  avg_win,
+                "streak_loss": avg_loss,
             })
         return result
     finally:
