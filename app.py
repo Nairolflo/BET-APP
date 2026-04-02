@@ -13,7 +13,7 @@ from core.database import (
     get_bete_noire_bets, get_roi_over_time, get_streak,
     update_bet_result, init_biathlon_watchlist,
     save_biathlon_watchlist, get_biathlon_watchlist, delete_biathlon_watchlist,
-    update_biathlon_watchlist_result,
+    update_biathlon_watchlist_result, purge_non_fr_bets,
 )
 
 app = Flask(__name__)
@@ -321,3 +321,12 @@ def api_watchlist_result(item_id):
         return jsonify({"error": "result doit être 0, 1 ou -1"}), 400
     update_biathlon_watchlist_result(item_id, result)
     return jsonify({"ok": True})
+
+@app.route("/api/admin/purge-non-fr-bets", methods=["POST"])
+def api_purge_non_fr_bets():
+    """Supprime tous les bets dont le bookmaker n'est pas FR (Winamax, Betclic, Unibet)."""
+    try:
+        deleted = purge_non_fr_bets()
+        return jsonify({"ok": True, "deleted": deleted})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
