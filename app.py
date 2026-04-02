@@ -145,6 +145,14 @@ def api_quota():
     return jsonify(get_odds_api_usage())
 
 
+@app.route("/api/admin/purge-non-fr-bets", methods=["POST"])
+def api_purge_non_fr_bets():
+    """Supprime tous les bets dont le bookmaker n'est pas FR (Winamax, Betclic, Unibet)."""
+    try:
+        deleted = purge_non_fr_bets()
+        return jsonify({"ok": True, "deleted": deleted})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
