@@ -329,12 +329,3 @@ def api_watchlist_result(item_id):
         return jsonify({"error": "result doit être 0, 1 ou -1"}), 400
     update_biathlon_watchlist_result(item_id, result)
     return jsonify({"ok": True})
-
-@app.route("/api/admin/purge-non-fr-bets", methods=["POST"])
-def api_purge_non_fr_bets():
-    """Supprime tous les bets dont le bookmaker n'est pas FR (Winamax, Betclic, Unibet)."""
-    try:
-        deleted = purge_non_fr_bets()
-        return jsonify({"ok": True, "deleted": deleted})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
