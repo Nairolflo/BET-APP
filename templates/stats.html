@@ -1,339 +1,159 @@
 {% extends "base.html" %}
 {% block title %}Statistiques — ValueBet Bot{% endblock %}
 {% block content %}
-<div class="container">
-    <div class="page-header">
-        <h1>📊 Statistiques de performance</h1>
-        <p>ROI et win rate séparés par catégorie de marché</p>
+<style>
+  .df-wrap { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+  .kpi-row { display: flex; gap: .8rem; flex-wrap: wrap; margin-bottom: 2rem; }
+  .kpi-box { background: #12152a; border: 1px solid #1e2240; border-radius: 10px; padding: .9rem 1.4rem; text-align: center; flex: 1; min-width: 110px; }
+  .kpi-box .kv { font-size: 1.6rem; font-weight: 800; font-family: 'Bebas Neue', sans-serif; }
+  .kpi-box .kl { font-size: .7rem; color: #5a5f7e; text-transform: uppercase; letter-spacing: 1px; margin-top: .2rem; }
+  .section-hd { display: flex; align-items: center; gap: .6rem; margin: 2rem 0 1rem; font-size: .78rem; color: #5a5f7e; text-transform: uppercase; letter-spacing: 1px; }
+  .section-hd::after { content:''; flex:1; height:1px; background:#1e2240; }
+  .market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+  .mcard { background: #12152a; border: 1px solid #1e2240; border-radius: 12px; padding: 1.2rem; position: relative; overflow: hidden; }
+  .mcard::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; }
+  .mcard.pos::before { background: #00c477; }
+  .mcard.neg::before { background: #ef476f; }
+  .mcard-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; }
+  .mcard-roi { font-size: .78rem; font-weight: 700; padding: .25rem .7rem; border-radius: 20px; }
+  .mcard-roi.pos { background: #00c47722; color: #00c477; border: 1px solid #00c47744; }
+  .mcard-roi.neg { background: #ef476f22; color: #ef476f; border: 1px solid #ef476f44; }
+  .mcard-count { font-size: .72rem; color: #5a5f7e; }
+  .mcard-name { font-size: .92rem; font-weight: 700; margin-bottom: 1rem; }
+  .ms-row { display: flex; justify-content: space-between; font-size: .78rem; padding: .25rem 0; border-bottom: 1px solid #1e2240; }
+  .ms-row:last-child { border-bottom: none; }
+  .ms-label { color: #5a5f7e; }
+  .ms-val { font-weight: 600; color: #c8ccf0; }
+  .streak-row { display: flex; align-items: center; gap: .4rem; margin-top: .8rem; }
+  .streak-label { font-size: .72rem; color: #5a5f7e; min-width: 90px; }
+  .dot { width: 14px; height: 14px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
+  .dot.w { background: #00c477; }
+  .dot.l { background: #ef476f; }
+  .chart-card { background: #12152a; border: 1px solid #1e2240; border-radius: 12px; padding: 1.4rem; margin-top: 1.5rem; }
+  .chart-title { font-size: .8rem; color: #5a5f7e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1rem; }
+  .league-card { background: #12152a; border: 1px solid #1e2240; border-radius: 12px; padding: 1.2rem; margin-top: 1rem; }
+  .ltable { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .ltable th { color: #5a5f7e; font-size: .72rem; text-transform: uppercase; letter-spacing: 1px; padding: .5rem .6rem; border-bottom: 1px solid #1e2240; text-align: left; }
+  .ltable td { padding: .55rem .6rem; border-bottom: 1px solid #1a1e38; }
+  .ltable tr:hover td { background: #1a1e38; }
+  .c-pos { color: #00c477; } .c-neg { color: #ef476f; } .c-mid { color: #ffd166; }
+  .badge-lg { background: #1e2240; border-radius: 4px; padding: .15rem .5rem; font-size: .72rem; }
+</style>
+
+<div class="df-wrap">
+
+  {% set o = stats.overall %}
+  <div class="kpi-row">
+    <div class="kpi-box"><div class="kv">{{ o.total or 0 }}</div><div class="kl">Total</div></div>
+    <div class="kpi-box"><div class="kv c-pos" style="color:#00c477">{{ o.wins or 0 }}</div><div class="kl">Gagnés</div></div>
+    <div class="kpi-box"><div class="kv" style="color:#ef476f">{{ o.losses or 0 }}</div><div class="kl">Perdus</div></div>
+    <div class="kpi-box"><div class="kv" style="color:#ffd166">{{ o.pending or 0 }}</div><div class="kl">En attente</div></div>
+    <div class="kpi-box">
+      <div class="kv" style="color:{% if (o.win_rate or 0) >= 55 %}#00c477{% elif (o.win_rate or 0) >= 45 %}#ffd166{% else %}#ef476f{% endif %}">{{ o.win_rate or 0 }}%</div>
+      <div class="kl">Win Rate</div>
     </div>
-
-    {% set o = stats.overall %}
-
-    <div class="stat-grid">
-        <div class="stat-card">
-            <div class="val">{{ o.total or 0 }}</div>
-            <div class="lbl">Total</div>
-        </div>
-        <div class="stat-card">
-            <div class="val c-high">{{ o.wins or 0 }}</div>
-            <div class="lbl">Gagnés</div>
-        </div>
-        <div class="stat-card">
-            <div class="val c-neg">{{ o.losses or 0 }}</div>
-            <div class="lbl">Perdus</div>
-        </div>
-        <div class="stat-card">
-            <div class="val" style="color:var(--yellow)">{{ o.pending or 0 }}</div>
-            <div class="lbl">En attente</div>
-        </div>
-        <div class="stat-card">
-            <div class="val {% if (o.win_rate or 0) >= 55 %}c-high{% elif (o.win_rate or 0) >= 45 %}c-mid{% else %}c-neg{% endif %}">
-                {{ o.win_rate or 0 }}%
-            </div>
-            <div class="lbl">Win Rate</div>
-        </div>
-        <div class="stat-card">
-            <div class="val {% if (o.roi or 0) > 0 %}c-high{% else %}c-neg{% endif %}">
-                {% if (o.roi or 0) > 0 %}+{% endif %}{{ o.roi or 0 }}%
-            </div>
-            <div class="lbl">ROI global</div>
-        </div>
-        <div class="stat-card">
-            <div class="val">+{{ o.avg_value_pct or 0 }}%</div>
-            <div class="lbl">Value moyenne</div>
-        </div>
-        {% if streak and streak.count > 1 %}
-        <div class="stat-card" style="border-color:{% if streak.type == 'win' %}#06d6a030{% else %}#ef476f30{% endif %}">
-            <div class="val" style="color:{% if streak.type == 'win' %}var(--success){% else %}var(--fail){% endif %}">
-                {% if streak.type == 'win' %}🔥{% else %}❄️{% endif %} {{ streak.count }}
-            </div>
-            <div class="lbl">Série en cours</div>
-        </div>
-        {% endif %}
-        {% if best_market %}
-        <div class="stat-card" style="border-color:#7c6fff40">
-            <div class="val" style="color:var(--accent);font-size:1rem">{{ best_market.market }}</div>
-            <div class="lbl">🏆 Meilleur marché (+{{ best_market.roi }}% ROI)</div>
-        </div>
-        {% endif %}
+    <div class="kpi-box">
+      <div class="kv" style="color:{% if (o.roi or 0) > 0 %}#00c477{% else %}#ef476f{% endif %}">{% if (o.roi or 0) > 0 %}+{% endif %}{{ o.roi or 0 }}%</div>
+      <div class="kl">ROI Global</div>
     </div>
-
-    <!-- 3 ONGLETS PRINCIPAUX -->
-    <div class="tabs">
-        <div class="tab active" data-group="stats" data-target="homeaway">🏠✈️ Home / Away</div>
-        <div class="tab" data-group="stats" data-target="overunder">⚽ Over / Under</div>
-        <div class="tab" data-group="stats" data-target="bn">🔥 Bête Noire</div>
-    </div>
-
-    <!-- ── ONGLET HOME / AWAY ── -->
-    <div class="tab-content active" data-group="stats" data-id="homeaway">
-        {% set home_m = by_market | selectattr("market", "equalto", "Home Win") | list %}
-        {% set away_m = by_market | selectattr("market", "equalto", "Away Win") | list %}
-
-        <div class="grid-2 mb2">
-            <!-- Home Win card -->
-            {% if home_m %}{% set m = home_m[0] %}
-            <div class="card" style="border-top:3px solid var(--accent2)">
-                <div class="card-title">🏠 Home Win</div>
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
-                    <span style="font-size:2.5rem;font-weight:800;color:{% if m.roi > 0 %}var(--success){% else %}var(--fail){% endif %}">
-                        {% if m.roi > 0 %}+{% endif %}{{ m.roi }}%
-                    </span>
-                    <div style="text-align:right;font-size:.8rem;color:var(--text-dim)">
-                        <div>Win rate : <strong style="color:var(--text)">{{ m.win_rate }}%</strong></div>
-                        <div>Cote moy. : <strong style="color:var(--text)">{{ m.avg_odds }}</strong></div>
-                    </div>
-                </div>
-                <div class="progress mb1">
-                    <div class="progress-bar" style="width:{{ [m.win_rate,100]|min }}%;background:{% if m.win_rate >= 55 %}var(--success){% elif m.win_rate >= 45 %}var(--yellow){% else %}var(--fail){% endif %}"></div>
-                </div>
-                <p style="font-size:.8rem;color:var(--text-dim)">{{ m.wins or 0 }}✅ / {{ m.losses or 0 }}❌ / {{ m.pending or 0 }}⏳ — {{ m.total }} paris</p>
-            </div>
-            {% else %}
-            <div class="card empty" style="padding:2rem">Pas encore de données Home Win</div>
-            {% endif %}
-
-            <!-- Away Win card -->
-            {% if away_m %}{% set m = away_m[0] %}
-            <div class="card" style="border-top:3px solid var(--accent)">
-                <div class="card-title">✈️ Away Win</div>
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
-                    <span style="font-size:2.5rem;font-weight:800;color:{% if m.roi > 0 %}var(--success){% else %}var(--fail){% endif %}">
-                        {% if m.roi > 0 %}+{% endif %}{{ m.roi }}%
-                    </span>
-                    <div style="text-align:right;font-size:.8rem;color:var(--text-dim)">
-                        <div>Win rate : <strong style="color:var(--text)">{{ m.win_rate }}%</strong></div>
-                        <div>Cote moy. : <strong style="color:var(--text)">{{ m.avg_odds }}</strong></div>
-                    </div>
-                </div>
-                <div class="progress mb1">
-                    <div class="progress-bar" style="width:{{ [m.win_rate,100]|min }}%;background:{% if m.win_rate >= 55 %}var(--success){% elif m.win_rate >= 45 %}var(--yellow){% else %}var(--fail){% endif %}"></div>
-                </div>
-                <p style="font-size:.8rem;color:var(--text-dim)">{{ m.wins or 0 }}✅ / {{ m.losses or 0 }}❌ / {{ m.pending or 0 }}⏳ — {{ m.total }} paris</p>
-            </div>
-            {% else %}
-            <div class="card empty" style="padding:2rem">Pas encore de données Away Win</div>
-            {% endif %}
-        </div>
-
-        <!-- Par ligue pour home/away -->
-        <div class="card">
-            <div class="card-title">Par ligue — Home & Away</div>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>Ligue</th><th>Total</th><th>✅</th><th>❌</th><th>⏳</th><th>Win rate</th><th>ROI</th><th>Value moy.</th></tr></thead>
-                    <tbody>
-                    {% for l in by_league %}
-                    <tr>
-                        <td><span class="badge badge-league">{{ l.league }}</span></td>
-                        <td>{{ l.total }}</td>
-                        <td class="c-high">{{ l.wins or 0 }}</td>
-                        <td class="c-neg">{{ l.losses or 0 }}</td>
-                        <td style="color:var(--yellow)">{{ l.pending or 0 }}</td>
-                        <td class="{% if l.win_rate >= 55 %}c-high{% elif l.win_rate >= 45 %}c-mid{% else %}c-neg{% endif %}">{{ l.win_rate }}%</td>
-                        <td class="{% if l.roi > 0 %}c-high{% else %}c-neg{% endif %}">{% if l.roi > 0 %}+{% endif %}{{ l.roi }}%</td>
-                        <td class="c-mid">+{{ l.avg_value or 0 }}%</td>
-                    </tr>
-                    {% endfor %}
-                    {% if not by_league %}<tr><td colspan="8" class="empty">Pas encore de données</td></tr>{% endif %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <!-- ── ONGLET OVER / UNDER ── -->
-    <div class="tab-content" data-group="stats" data-id="overunder">
-        {% set over_markets = by_market | rejectattr("market", "equalto", "Home Win") | rejectattr("market", "equalto", "Away Win") | rejectattr("market", "equalto", "Bête Noire") | list %}
-
-        {% if over_markets %}
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;margin-bottom:1.5rem">
-        {% for m in by_market %}
-        <div class="card" style="border-top:3px solid {% if m.roi > 0 %}var(--success){% else %}var(--fail){% endif %};position:relative">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem">
-                <span style="background:{% if m.roi > 0 %}#00c47722{% else %}#ff4d6d22{% endif %};color:{% if m.roi > 0 %}var(--success){% else %}var(--fail){% endif %};border:1px solid {% if m.roi > 0 %}#00c47744{% else %}#ff4d6d44{% endif %};border-radius:20px;padding:.2rem .7rem;font-size:.78rem;font-weight:700">
-                    ROI {% if m.roi > 0 %}+{% endif %}{{ m.roi }}%
-                </span>
-                <span style="font-size:.72rem;color:var(--text-dim)">{{ m.wins or 0 }}W {{ m.losses or 0 }}L</span>
-            </div>
-            <div class="card-title" style="margin-bottom:1rem;font-size:.9rem">
-                {% if "BTTS" in m.market or "deux" in m.market %}🤝
-                {% elif "Over" in m.market or "Plus" in m.market %}⬆️
-                {% elif "Under" in m.market or "Moins" in m.market %}⬇️
-                {% elif "Home" in m.market %}🏠
-                {% elif "Away" in m.market %}✈️
-                {% elif "Noire" in m.market %}🔥
-                {% else %}⚽{% endif %}
-                {{ m.market }}
-            </div>
-            <table style="width:100%;font-size:.8rem;border-collapse:collapse">
-                <tr>
-                    <td style="color:var(--text-dim);padding:.15rem 0">En cours</td>
-                    <td style="text-align:right;font-weight:600">{{ m.pending or 0 }}</td>
-                </tr>
-                <tr>
-                    <td style="color:var(--text-dim);padding:.15rem 0">Terminés</td>
-                    <td style="text-align:right;font-weight:600">{{ (m.wins or 0) + (m.losses or 0) }}</td>
-                </tr>
-                <tr>
-                    <td style="color:var(--text-dim);padding:.15rem 0">Réussite (%)</td>
-                    <td style="text-align:right;font-weight:700;color:{% if m.win_rate >= 55 %}var(--success){% elif m.win_rate >= 45 %}var(--yellow){% else %}var(--fail){% endif %}">{{ m.win_rate }}</td>
-                </tr>
-                <tr>
-                    <td style="color:var(--text-dim);padding:.15rem 0">Cote moyenne</td>
-                    <td style="text-align:right;font-weight:600">{{ m.avg_odds }}</td>
-                </tr>
-                <tr>
-                    <td style="color:var(--text-dim);padding:.15rem 0">Série réussite moy.</td>
-                    <td style="text-align:right;font-weight:600">{{ m.streak_win or "—" }}</td>
-                </tr>
-                <tr>
-                    <td style="color:var(--text-dim);padding:.15rem 0">Série échec moy.</td>
-                    <td style="text-align:right;font-weight:600">{{ m.streak_loss or "—" }}</td>
-                </tr>
-            </table>
-            <!-- Série actuelle -->
-            <div style="margin-top:.8rem;display:flex;align-items:center;gap:.3rem">
-                <span style="font-size:.72rem;color:var(--text-dim);margin-right:.3rem">Série actuelle</span>
-                {% set streak = m.streak_cur or 0 %}
-                {% if streak > 0 %}
-                    {% for i in range([streak,6]|min) %}<span style="width:14px;height:14px;background:var(--success);border-radius:3px;display:inline-block"></span>{% endfor %}
-                {% elif streak < 0 %}
-                    {% for i in range([streak|abs,6]|min) %}<span style="width:14px;height:14px;background:var(--fail);border-radius:3px;display:inline-block"></span>{% endfor %}
-                {% else %}
-                    <span style="color:var(--text-dim);font-size:.75rem">—</span>
-                {% endif %}
-            </div>
-        </div>
-        {% endfor %}
-        </div>
-
-        <div class="card">
-            <div class="card-title">Récap Over / Under</div>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>Marché</th><th>Total</th><th>✅</th><th>❌</th><th>⏳</th><th>Win rate</th><th>ROI</th><th>Cote moy.</th></tr></thead>
-                    <tbody>
-                    {% for m in over_markets %}
-                    <tr>
-                        <td><span class="badge badge-market">{{ m.market }}</span></td>
-                        <td>{{ m.total }}</td>
-                        <td class="c-high">{{ m.wins or 0 }}</td>
-                        <td class="c-neg">{{ m.losses or 0 }}</td>
-                        <td style="color:var(--yellow)">{{ m.pending or 0 }}</td>
-                        <td class="{% if m.win_rate >= 55 %}c-high{% elif m.win_rate >= 45 %}c-mid{% else %}c-neg{% endif %}">{{ m.win_rate }}%</td>
-                        <td class="{% if m.roi > 0 %}c-high{% else %}c-neg{% endif %}">{% if m.roi > 0 %}+{% endif %}{{ m.roi }}%</td>
-                        <td style="color:var(--text-dim)">{{ m.avg_odds }}</td>
-                    </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% else %}
-        <div class="card empty">Pas encore de paris Over/Under.</div>
-        {% endif %}
-    </div>
-
-    <!-- ── ONGLET BÊTE NOIRE ── -->
-    <div class="tab-content" data-group="stats" data-id="bn">
-        {% set bn_total   = bn_bets | length %}
-        {% set bn_wins    = bn_bets | selectattr("success", "equalto", 1) | list | length %}
-        {% set bn_losses  = bn_bets | selectattr("success", "equalto", 0) | list | length %}
-        {% set bn_pending = bn_bets | selectattr("success", "equalto", -1) | list | length %}
-        {% set bn_settled = [bn_wins + bn_losses, 1] | max %}
-        {% set bn_wr      = (bn_wins / bn_settled * 100) | round(1) %}
-        {% set bn_roi     = ((bn_wins - bn_losses) / bn_settled * 100) | round(1) %}
-
-        <div class="grid-2 mb2">
-            <div class="card" style="border-top:3px solid #ff6b6b">
-                <div class="card-title">🔥 Performance Bête Noire H2H</div>
-                <div style="font-size:2.5rem;font-weight:800;color:{% if bn_roi > 0 %}var(--success){% else %}var(--fail){% endif %};margin-bottom:.8rem">
-                    {% if bn_roi > 0 %}+{% endif %}{{ bn_roi }}% ROI
-                </div>
-                <div class="progress mb1">
-                    <div class="progress-bar" style="width:{{ [bn_wr,100]|min }}%;background:#ff6b6b"></div>
-                </div>
-                <p style="font-size:.8rem;color:var(--text-dim)">
-                    Win rate : <strong style="color:var(--text)">{{ bn_wr }}%</strong> ·
-                    {{ bn_wins }}✅ / {{ bn_losses }}❌ / {{ bn_pending }}⏳ — {{ bn_total }} paris
-                </p>
-            </div>
-            <div class="card" style="border-left:3px solid #ff6b6b">
-                <div class="card-title">Comment ça fonctionne</div>
-                <table style="font-size:.83rem">
-                    <tr><td style="color:var(--text-dim);padding:.3rem .5rem">≥ 70% win rate sur 5+ matchs</td><td style="color:#ff9999;padding:.3rem .5rem">+4% proba</td></tr>
-                    <tr><td style="color:var(--text-dim);padding:.3rem .5rem">≥ 80% win rate sur 8+ matchs</td><td style="color:#ff9999;padding:.3rem .5rem">+6% proba</td></tr>
-                    <tr><td style="color:var(--text-dim);padding:.3rem .5rem">≥ 90% win rate sur 10+ matchs</td><td style="color:#ff9999;padding:.3rem .5rem">+8% proba</td></tr>
-                    <tr><td style="color:var(--text-dim);padding:.3rem .5rem">Données</td><td style="color:var(--text-dim);padding:.3rem .5rem">3 saisons, avant date match</td></tr>
-                </table>
-            </div>
-        </div>
-
-        {% if bn_bets %}
-        <div class="card">
-            <div class="card-title">Tous les paris bête noire ({{ bn_total }})</div>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>Date</th><th>Match</th><th>Ligue</th><th>Marché</th><th>Cote</th><th>Value</th><th>H2H %</th><th>Résultat</th></tr></thead>
-                    <tbody>
-                    {% for b in bn_bets %}
-                    <tr>
-                        <td style="color:var(--text-dim);font-size:.8rem">{{ b.match_date }}</td>
-                        <td><strong>{{ b.home_team }}</strong> vs <strong>{{ b.away_team }}</strong></td>
-                        <td><span class="badge badge-league">{{ b.league }}</span></td>
-                        <td><span class="badge badge-market">{{ b.market }}</span></td>
-                        <td><strong>{{ b.bk_odds }}</strong></td>
-                        <td class="c-mid">+{{ "%.1f"|format((b.value or 0)*100) }}%</td>
-                        <td><span class="badge badge-bn">🔥 {{ "%.0f"|format((b.bete_noire_rate or 0)*100) }}%</span></td>
-                        <td>
-                            {% if b.success == 1 %}<span class="badge badge-win">✅</span>
-                            {% elif b.success == 0 %}<span class="badge badge-loss">❌</span>
-                            {% else %}<span class="badge badge-pending">⏳</span>{% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% else %}
-        <div class="card empty">Aucun paris bête noire pour le moment.</div>
-        {% endif %}
-    </div>
-
-    <!-- Évolution ROI (toujours visible) -->
-    {% if roi_time %}
-    <div class="card mt3">
-        <div class="card-title">📈 Évolution du ROI</div>
-        <canvas id="roiChart" height="100"></canvas>
+    {% if best_market %}
+    <div class="kpi-box" style="border-color:#7c6fff40">
+      <div class="kv" style="color:#7c6fff;font-size:1rem">{{ best_market.market }}</div>
+      <div class="kl">🏆 Meilleur marché</div>
     </div>
     {% endif %}
-</div>
+  </div>
 
+  <div class="section-hd">📊 Performance par marché</div>
+  <div class="market-grid">
+  {% for m in by_market %}
+    {% set is_pos = m.roi > 0 %}
+    {% if m.market == "Home Win" %}{% set icon = "🏠" %}
+    {% elif m.market == "Away Win" %}{% set icon = "✈️" %}
+    {% elif "BTTS" in m.market or "deux" in m.market %}{% set icon = "🤝" %}
+    {% elif "Over" in m.market %}{% set icon = "⬆️" %}
+    {% elif "Under" in m.market %}{% set icon = "⬇️" %}
+    {% elif "Noire" in m.market %}{% set icon = "🔥" %}
+    {% else %}{% set icon = "⚽" %}{% endif %}
+    <div class="mcard {{ 'pos' if is_pos else 'neg' }}">
+      <div class="mcard-top">
+        <span class="mcard-roi {{ 'pos' if is_pos else 'neg' }}">ROI {% if is_pos %}+{% endif %}{{ m.roi }}%</span>
+        <span class="mcard-count">{{ (m.wins or 0) + (m.losses or 0) }} terminés</span>
+      </div>
+      <div class="mcard-name">{{ icon }} {{ m.market }}</div>
+      <div class="ms-row"><span class="ms-label">En cours</span><span class="ms-val">{{ m.pending or 0 }}</span></div>
+      <div class="ms-row"><span class="ms-label">Terminés</span><span class="ms-val">{{ (m.wins or 0) + (m.losses or 0) }}</span></div>
+      <div class="ms-row">
+        <span class="ms-label">Réussite (%)</span>
+        <span class="ms-val" style="color:{% if m.win_rate >= 55 %}#00c477{% elif m.win_rate >= 45 %}#ffd166{% else %}#ef476f{% endif %}">{{ m.win_rate }}</span>
+      </div>
+      <div class="ms-row"><span class="ms-label">Cote moyenne</span><span class="ms-val">{{ m.avg_odds }}</span></div>
+      <div class="ms-row"><span class="ms-label">Série réussite moy.</span><span class="ms-val">{{ m.streak_win or "—" }}</span></div>
+      <div class="ms-row"><span class="ms-label">Série échec moy.</span><span class="ms-val">{{ m.streak_loss or "—" }}</span></div>
+      {% set streak = m.streak_cur or 0 %}
+      <div class="streak-row">
+        <span class="streak-label">Série actuelle</span>
+        {% if streak > 0 %}{% for i in range([streak,6]|min) %}<span class="dot w"></span>{% endfor %}
+        {% elif streak < 0 %}{% for i in range([streak|abs,6]|min) %}<span class="dot l"></span>{% endfor %}
+        {% else %}<span style="font-size:.75rem;color:#5a5f7e">—</span>{% endif %}
+      </div>
+    </div>
+  {% else %}
+    <div style="color:#5a5f7e;padding:2rem;text-align:center">Aucune donnée.</div>
+  {% endfor %}
+  </div>
+
+  <div class="section-hd">🏆 Par ligue</div>
+  <div class="league-card">
+    <div style="overflow-x:auto">
+      <table class="ltable">
+        <thead><tr><th>Ligue</th><th>Total</th><th>✅</th><th>❌</th><th>⏳</th><th>Win rate</th><th>ROI</th><th>Value moy.</th></tr></thead>
+        <tbody>
+        {% for l in by_league %}
+        <tr>
+          <td><span class="badge-lg">{{ l.league }}</span></td>
+          <td>{{ l.total }}</td>
+          <td class="c-pos">{{ l.wins or 0 }}</td>
+          <td class="c-neg">{{ l.losses or 0 }}</td>
+          <td class="c-mid">{{ l.pending or 0 }}</td>
+          <td class="{{ 'c-pos' if l.win_rate >= 55 else ('c-mid' if l.win_rate >= 45 else 'c-neg') }}">{{ l.win_rate }}%</td>
+          <td class="{{ 'c-pos' if l.roi > 0 else 'c-neg' }}">{% if l.roi > 0 %}+{% endif %}{{ l.roi }}%</td>
+          <td class="c-mid">+{{ l.avg_value or 0 }}%</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" style="color:#5a5f7e;text-align:center;padding:1.5rem">Pas encore de données</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if roi_time %}
+  <div class="chart-card">
+    <div class="chart-title">📈 Évolution du ROI</div>
+    <canvas id="roiChart" height="80"></canvas>
+  </div>
+  {% endif %}
+
+</div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
 {% if roi_time %}
 const rd = {{ roi_time | tojson }};
+const lastRoi = rd[rd.length-1]?.roi ?? 0;
 new Chart(document.getElementById('roiChart'), {
-    type: 'line',
-    data: {
-        labels: rd.map(d => d.date),
-        datasets: [{
-            data: rd.map(d => d.roi),
-            borderColor: rd[rd.length-1]?.roi >= 0 ? '#06d6a0' : '#ef476f',
-            backgroundColor: rd[rd.length-1]?.roi >= 0 ? '#06d6a008' : '#ef476f08',
-            fill: true, tension: 0.4, pointRadius: 2,
-        }]
-    },
-    options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-            x: { ticks: { color: '#7b7fa8', maxTicksLimit: 10 }, grid: { color: '#25295020' } },
-            y: { ticks: { color: '#7b7fa8', callback: v => v+'%' }, grid: { color: '#25295040' } }
-        }
+  type: 'line',
+  data: {
+    labels: rd.map(d => d.date),
+    datasets: [{ data: rd.map(d => d.roi), borderColor: lastRoi >= 0 ? '#00c477' : '#ef476f',
+      backgroundColor: lastRoi >= 0 ? '#00c47710' : '#ef476f10', fill: true, tension: 0.4, pointRadius: 2, borderWidth: 2 }]
+  },
+  options: { responsive: true, plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#5a5f7e', maxTicksLimit: 10 }, grid: { color: '#1e224040' } },
+      y: { ticks: { color: '#5a5f7e', callback: v => v+'%' }, grid: { color: '#1e224040' } }
     }
+  }
 });
 {% endif %}
 </script>
